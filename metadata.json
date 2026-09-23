@@ -1,0 +1,7 @@
+{
+  "name": "depos",
+  "description": "Sistema integral de control de stock, inventario y exportación depos con escáner y alertas.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

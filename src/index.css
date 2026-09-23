@@ -1,0 +1,40 @@
+@import "tailwindcss";
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+body {
+  background-color: #0a0c12;
+  color: #f4f4f5;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Capacitor / MLKit native and webview camera transparency */
+body.barcode-scanner-active,
+html.barcode-scanner-active {
+  background-color: transparent !important;
+  background: transparent !important;
+}
+
+body.barcode-scanner-active #root {
+  background-color: transparent !important;
+  background: transparent !important;
+}
+
+/* Ensure background modals and overlays never obscure camera vision when scanning units or bulks */
+body.barcode-scanner-active #product-form-modal,
+body.barcode-scanner-active #stock-movement-modal,
+body.barcode-scanner-active #product-detail-modal {
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
