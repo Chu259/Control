@@ -211,7 +211,7 @@ async function startServer() {
       store.newProductsAlerts = (store.newProductsAlerts || []).filter((id) => !reviewedSet.has(id));
     }
 
-    // 3. Merge Products from client
+    // 3. Merge Products from client and localPendingProducts (Requirement 3)
     let newProductsAddedCount = 0;
     const currentProductsMap = new Map<string, any>();
     const barcodeMap = new Map<string, any>();
@@ -223,8 +223,20 @@ async function startServer() {
       }
     }
 
-    if (Array.isArray(body.products) && body.products.length > 0) {
-      for (const clientProd of body.products) {
+    const incomingProducts: any[] = [];
+    if (Array.isArray(body.products)) {
+      incomingProducts.push(...body.products);
+    }
+    if (Array.isArray(body.localPendingProducts)) {
+      for (const lp of body.localPendingProducts) {
+        if (!incomingProducts.some((p) => p.id === lp.id)) {
+          incomingProducts.push(lp);
+        }
+      }
+    }
+
+    if (incomingProducts.length > 0) {
+      for (const clientProd of incomingProducts) {
         const barcodeKey = clientProd.barcodeUnit || clientProd.barcode;
         let existingProd = currentProductsMap.get(clientProd.id) || (barcodeKey ? barcodeMap.get(barcodeKey) : undefined);
 

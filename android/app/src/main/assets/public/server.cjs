@@ -192,8 +192,19 @@ async function startServer() {
         barcodeMap.set(p.barcodeUnit || p.barcode, p);
       }
     }
-    if (Array.isArray(body.products) && body.products.length > 0) {
-      for (const clientProd of body.products) {
+    const incomingProducts = [];
+    if (Array.isArray(body.products)) {
+      incomingProducts.push(...body.products);
+    }
+    if (Array.isArray(body.localPendingProducts)) {
+      for (const lp of body.localPendingProducts) {
+        if (!incomingProducts.some((p) => p.id === lp.id)) {
+          incomingProducts.push(lp);
+        }
+      }
+    }
+    if (incomingProducts.length > 0) {
+      for (const clientProd of incomingProducts) {
         const barcodeKey = clientProd.barcodeUnit || clientProd.barcode;
         let existingProd = currentProductsMap.get(clientProd.id) || (barcodeKey ? barcodeMap.get(barcodeKey) : void 0);
         if (existingProd) {

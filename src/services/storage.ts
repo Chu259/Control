@@ -4,20 +4,89 @@ import { AuthService } from './authService';
 
 const STORAGE_KEYS = {
   PRODUCTS: 'stock_app_products_v1',
+  LOCAL_PENDING_PRODUCTS: 'stock_app_local_pending_products_v1',
   MOVEMENTS: 'stock_app_movements_v1',
   CATEGORIES: 'stock_app_categories_v1',
   SETTINGS: 'stock_app_settings_v1',
 };
 
 export const StorageService = {
+  // Requirement 1: Manage local pending products for Secondary Device (Dispositivo Secundario)
+  getLocalPendingProducts(): Product[] {
+    try {
+      const data = localStorage.getItem(STORAGE_KEYS.LOCAL_PENDING_PRODUCTS);
+      if (!data) return [];
+      return JSON.parse(data);
+    } catch {
+      return [];
+    }
+  },
+
+  saveLocalPendingProducts(products: Product[]): void {
+    try {
+      localStorage.setItem(STORAGE_KEYS.LOCAL_PENDING_PRODUCTS, JSON.stringify(products));
+    } catch (e) {
+      console.error('Error guardando productos locales pendientes:', e);
+    }
+  },
+
+  addLocalPendingProduct(product: Product): void {
+    const list = this.getLocalPendingProducts();
+    const idx = list.findIndex((p) => p.id === product.id || (p.barcodeUnit && p.barcodeUnit === product.barcodeUnit));
+    if (idx >= 0) {
+      list[idx] = product;
+    } else {
+      list.unshift(product);
+    }
+    this.saveLocalPendingProducts(list);
+  },
+
+  removeLocalPendingProduct(productId: string): void {
+    const list = this.getLocalPendingProducts().filter((p) => p.id !== productId);
+    this.saveLocalPendingProducts(list);
+  },
+
+  clearLocalPendingProducts(): void {
+    try {
+      localStorage.removeItem(STORAGE_KEYS.LOCAL_PENDING_PRODUCTS);
+    } catch {}
+  },
+
   getProducts(): Product[] {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.PRODUCTS);
+      let parsed: Product[] = [];
       if (!data) {
         localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(INITIAL_PRODUCTS));
-        return INITIAL_PRODUCTS;
+        parsed = [...INITIAL_PRODUCTS];
+      } else {
+        parsed = JSON.parse(data);
       }
-      const parsed: Product[] = JSON.parse(data);
+
+      // Guarantee initial products exist if database was freshly initialized
+      INITIAL_PRODUCTS.forEach((ip) => {
+        if (!parsed.some((p) => p.id === ip.id || (p.barcodeUnit && p.barcodeUnit === ip.barcodeUnit))) {
+          parsed.push(ip);
+        }
+      });
+
+      // Requirement 1: Merge with localPendingProducts so newly created products are ALWAYS visible
+      const localPending = this.getLocalPendingProducts();
+      if (localPending.length > 0) {
+        const existingIds = new Set(parsed.map((p) => p.id));
+        let addedCount = 0;
+        for (const lp of localPending) {
+          if (!existingIds.has(lp.id)) {
+            parsed.unshift(lp);
+            existingIds.add(lp.id);
+            addedCount++;
+          }
+        }
+        if (addedCount > 0) {
+          this.saveProducts(parsed);
+        }
+      }
+
       const oldCatMap: Record<string, string> = {
         bebidas: 'pasillo-1',
         snacks: 'pasillo-2',
@@ -26,35 +95,8 @@ export const StorageService = {
         abarrotes: 'pasillo-5',
       };
 
-      // Keep strictly ONLY the products requested by the user from the image:
-      // 1. "Queso snack Dos hermanos"
-      // 2. "Perita molto"
-      const allowedBarcodes = new Set(['7790503000272', '7791579069323']);
-      const allowedIds = new Set(['prod-1789964939522', 'prod-1789957711181']);
-      const isTargetProduct = (p: Product) =>
-        allowedIds.has(p.id) ||
-        allowedBarcodes.has(p.barcodeUnit || p.barcode) ||
-        p.name.toLowerCase().includes('queso snack') ||
-        p.name.toLowerCase().includes('perita molto');
-
-      let targetList = parsed.filter(isTargetProduct);
-      if (targetList.length === 0) {
-        targetList = INITIAL_PRODUCTS;
-      } else {
-        INITIAL_PRODUCTS.forEach((ip) => {
-          if (!targetList.some((p) => p.id === ip.id || (p.barcodeUnit && p.barcodeUnit === ip.barcodeUnit))) {
-            targetList.push(ip);
-          }
-        });
-      }
-
-      // Persist the clean list if legacy products were purged
-      if (parsed.length !== targetList.length) {
-        localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(targetList));
-      }
-
       // Normalize to guarantee barcodeUnit, unitsPerBulk, and migrated category
-      return targetList.map((p) => {
+      return parsed.map((p) => {
         const unitsPerBulk = Number(p.unitsPerBulk) > 0 ? Number(p.unitsPerBulk) : 12;
         const mappedCategory = oldCatMap[p.category] || p.category || 'pasillo-1';
         return {
@@ -65,8 +107,8 @@ export const StorageService = {
           barcodeBulk: p.barcodeBulk || undefined,
           unitsPerBulk,
           bulkUnitName: p.bulkUnitName || `Caja x${unitsPerBulk}`,
-          costPriceBulk: p.costPriceBulk ?? Number((p.costPrice * unitsPerBulk).toFixed(2)),
-          sellingPriceBulk: p.sellingPriceBulk ?? Number((p.sellingPrice * unitsPerBulk).toFixed(2)),
+          costPriceBulk: p.costPriceBulk ?? Number(((p.costPrice || 0) * unitsPerBulk).toFixed(2)),
+          sellingPriceBulk: p.sellingPriceBulk ?? Number(((p.sellingPrice || 0) * unitsPerBulk).toFixed(2)),
         };
       });
     } catch {
@@ -92,6 +134,14 @@ export const StorageService = {
     const products = this.getProducts();
     const index = products.findIndex((p) => p.id === product.id);
     const unitsPerBulk = Number(product.unitsPerBulk) > 0 ? Number(product.unitsPerBulk) : 12;
+
+    const settings = this.getSettings();
+    const isClientRole = settings.syncConfig?.role === 'client';
+    const currentUser = AuthService.getCurrentUser();
+    const isClientOrUser = isClientRole || currentUser?.role !== 'admin';
+    const deviceId = settings.syncConfig?.deviceId || (isClientRole ? 'dev-client-1' : 'dev-master-principal');
+    const deviceName = settings.syncConfig?.deviceName || (isClientRole ? 'Terminal Móvil (Vendedor)' : 'Caja Principal (Mostrador)');
+
     const normalizedProduct: Product = {
       ...product,
       barcode: product.barcodeUnit || product.barcode,
@@ -105,20 +155,27 @@ export const StorageService = {
     if (index >= 0) {
       updated = [...products];
       updated[index] = normalizedProduct;
+      if (isClientOrUser) {
+        this.addLocalPendingProduct(normalizedProduct);
+      }
     } else {
-      const currentUser = AuthService.getCurrentUser();
-      const isClientOrUser = currentUser?.role !== 'admin';
-      updated = [
-        {
-          ...normalizedProduct,
-          id: product.id || `prod-${Date.now()}`,
-          isNewFromUser: product.isNewFromUser !== undefined ? product.isNewFromUser : isClientOrUser,
-          addedByUserName: product.addedByUserName || currentUser?.name || 'Usuario',
-          addedAt: product.addedAt || new Date().toISOString(),
-          reviewedByAdmin: product.reviewedByAdmin !== undefined ? product.reviewedByAdmin : !isClientOrUser,
-        },
-        ...products,
-      ];
+      const newProductRecord: Product = {
+        ...normalizedProduct,
+        id: product.id || `prod-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        isNewFromUser: product.isNewFromUser !== undefined ? product.isNewFromUser : isClientOrUser,
+        addedByDeviceId: product.addedByDeviceId || deviceId,
+        addedByDeviceName: product.addedByDeviceName || deviceName,
+        addedByUserName: product.addedByUserName || currentUser?.name || 'Vendedor Móvil',
+        addedAt: product.addedAt || new Date().toISOString(),
+        reviewedByAdmin: product.reviewedByAdmin !== undefined ? product.reviewedByAdmin : !isClientOrUser,
+      };
+
+      updated = [newProductRecord, ...products];
+
+      // Requirement 1: Dispositivo secundario guarda sus productos agregados en localPendingProducts
+      if (isClientOrUser) {
+        this.addLocalPendingProduct(newProductRecord);
+      }
     }
     this.saveProducts(updated);
     return updated;
@@ -145,6 +202,7 @@ export const StorageService = {
   },
 
   deleteProduct(productId: string): Product[] {
+    this.removeLocalPendingProduct(productId);
     const products = this.getProducts().filter((p) => p.id !== productId);
     this.saveProducts(products);
     return products;

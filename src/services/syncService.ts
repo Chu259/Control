@@ -49,6 +49,14 @@ export const SyncService = {
         cfg.serverUrl = `http://${DEFAULT_HOTSPOT_IP}:${DEFAULT_PORT}`;
         this.saveDeviceConfig(cfg);
       }
+      // If role is client but deviceId is still the default master ID, give it a unique client ID
+      if (cfg.role === 'client' && (cfg.deviceId === 'dev-master-principal' || cfg.deviceId.startsWith('dev-master'))) {
+        cfg.deviceId = `dev-client-${Math.random().toString(36).substring(2, 8)}`;
+        if (cfg.deviceName === 'Caja Principal (Mostrador)') {
+          cfg.deviceName = 'Terminal Móvil (Vendedor)';
+        }
+        this.saveDeviceConfig(cfg);
+      }
       return cfg;
     }
 
@@ -86,17 +94,29 @@ export const SyncService = {
   createSyncPayload(): SyncPayload {
     const config = this.getDeviceConfig();
     const currentUser = AuthService.getCurrentUser();
+    const localPending = StorageService.getLocalPendingProducts();
+
+    // Requirement 2: Combine current products with localPendingProducts ensuring no newly created product is lost
+    const productsMap = new Map<string, Product>();
+    for (const p of StorageService.getProducts()) {
+      productsMap.set(p.id, p);
+    }
+    for (const lp of localPending) {
+      productsMap.set(lp.id, lp);
+    }
+    const combinedProducts = Array.from(productsMap.values());
 
     return {
       version: 3,
       storeCode: config.syncCode.trim().toUpperCase(),
-      role: config.role,
+      role: config.role, // 'client' or 'master'
       deviceId: config.deviceId,
       deviceName: config.deviceName,
-      userName: currentUser?.name || 'Usuario',
+      userName: currentUser?.name || (config.role === 'client' ? 'Vendedor Móvil' : 'Administrador'),
       userRole: currentUser?.role || (config.role === 'master' ? 'admin' : 'user'),
       timestamp: new Date().toISOString(),
-      products: StorageService.getProducts(),
+      products: combinedProducts,
+      localPendingProducts: localPending, // Requirement 1 & 2: Packaged cleanly
       movements: StorageService.getMovements(),
       shoppingList: ShoppingService.getShoppingList(),
       replenishmentList: ShoppingService.getReplenishmentList(),
@@ -227,6 +247,10 @@ export const SyncService = {
       // 1. Update Products locally
       if (Array.isArray(resData.products) && resData.products.length > 0) {
         StorageService.saveProducts(resData.products);
+        // Requirement 1 & 3: Clear local pending queue once server has successfully processed them
+        if (config.role === 'client') {
+          StorageService.clearLocalPendingProducts();
+        }
       }
 
       // 2. Update Movements locally (all movements marked synced)
@@ -397,15 +421,53 @@ export const SyncService = {
     downloadAnchor.remove();
   },
 
-  // Import sync package file
-  importSyncFile(fileContent: string): { success: boolean; message: string; count?: number } {
+  // Import sync package file or raw JSON text
+  importSyncFile(fileContent: string): { success: boolean; message: string; count?: number; newProductsCount?: number } {
     try {
       const payload: SyncPayload = JSON.parse(fileContent);
       if (!payload.products || !Array.isArray(payload.products)) {
-        return { success: false, message: 'El archivo no contiene un inventario válido' };
+        return { success: false, message: 'El archivo o texto no contiene una lista de inventario válida' };
       }
 
-      StorageService.saveProducts(payload.products);
+      // Requirement 1 & 2: Safely combine existing local catalog with incoming products and localPendingProducts
+      const currentProducts = StorageService.getProducts();
+      const currentMap = new Map<string, Product>();
+      currentProducts.forEach((p) => currentMap.set(p.id, p));
+
+      const incomingList = [...payload.products];
+      if (Array.isArray(payload.localPendingProducts)) {
+        for (const lp of payload.localPendingProducts) {
+          if (!incomingList.some((p) => p.id === lp.id)) {
+            incomingList.push(lp);
+          }
+        }
+      }
+
+      let newItemsCount = 0;
+      for (const item of incomingList) {
+        const existing = currentMap.get(item.id);
+        if (existing) {
+          currentMap.set(item.id, {
+            ...existing,
+            ...item,
+            stock: payload.role === 'master' ? item.stock : existing.stock,
+          });
+        } else {
+          const isFromClient = payload.role === 'client' || item.isNewFromUser;
+          currentMap.set(item.id, {
+            ...item,
+            isNewFromUser: isFromClient,
+            reviewedByAdmin: !isFromClient,
+            addedByDeviceId: item.addedByDeviceId || payload.deviceId,
+            addedByDeviceName: item.addedByDeviceName || payload.deviceName,
+            addedByUserName: item.addedByUserName || payload.userName || 'Usuario',
+          });
+          newItemsCount++;
+        }
+      }
+
+      const mergedProducts = Array.from(currentMap.values());
+      StorageService.saveProducts(mergedProducts);
       if (payload.categories) StorageService.saveCategories(payload.categories);
       if (payload.movements) StorageService.saveMovements(payload.movements);
       if (payload.shoppingList) ShoppingService.mergeShoppingList(payload.shoppingList);
@@ -418,13 +480,19 @@ export const SyncService = {
         lastSyncTimestamp: new Date().toISOString(),
       });
 
+      let summary = `Se procesaron ${mergedProducts.length} productos con éxito.`;
+      if (newItemsCount > 0) {
+        summary += ` Se incorporaron ${newItemsCount} producto(s) nuevo(s) del dispositivo emisor.`;
+      }
+
       return {
         success: true,
-        message: `Se importaron ${payload.products.length} productos, ${payload.movements ? payload.movements.length : 0} movimientos y listas de compras exitosamente.`,
-        count: payload.products.length,
+        message: summary,
+        count: mergedProducts.length,
+        newProductsCount: newItemsCount,
       };
     } catch (e: any) {
-      return { success: false, message: 'Error al procesar el archivo: ' + e.message };
+      return { success: false, message: 'Error al procesar el archivo o texto JSON: ' + e.message };
     }
   },
 };

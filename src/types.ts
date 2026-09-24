@@ -152,6 +152,7 @@ export interface SyncPayload {
   userRole?: UserRole;
   timestamp: string;
   products: Product[];
+  localPendingProducts?: Product[];
   movements: StockMovement[];
   shoppingList?: ShoppingListItem[];
   replenishmentList?: ReplenishmentItem[];

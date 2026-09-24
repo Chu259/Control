@@ -23,6 +23,7 @@ import {
   FileCode,
   Share2,
 } from 'lucide-react';
+import { Clipboard } from '@capacitor/clipboard';
 import { DeviceSyncConfig, SyncRole, Product, StockMovement } from '../types';
 import { SyncService } from '../services/syncService';
 import { StorageService } from '../services/storage';
@@ -88,15 +89,24 @@ export const SyncView: React.FC<SyncViewProps> = ({
   }, [config.syncCode, config.deviceName, config.role, config.hostIp, hostIpInput]);
 
   const handleRoleChange = (newRole: SyncRole) => {
+    let newDeviceId = config.deviceId;
+    if (newRole === 'client' && (config.deviceId === 'dev-master-principal' || config.deviceId.startsWith('dev-master'))) {
+      newDeviceId = `dev-client-${Math.random().toString(36).substring(2, 8)}`;
+    } else if (newRole === 'master' && config.deviceId.startsWith('dev-client')) {
+      newDeviceId = `dev-master-${Math.random().toString(36).substring(2, 8)}`;
+    }
+
     const updated: DeviceSyncConfig = {
       ...config,
       role: newRole,
+      deviceId: newDeviceId,
       deviceName:
         newRole === 'master'
           ? (config.deviceName.includes('Terminal') ? 'Caja Principal (Mostrador)' : config.deviceName)
           : (config.deviceName.includes('Principal') ? 'Terminal Móvil (Vendedor)' : config.deviceName),
     };
     setConfig(updated);
+    setDeviceNameInput(updated.deviceName);
     SyncService.saveDeviceConfig(updated);
     Sound.playScanBeep();
     setMessage({
@@ -275,24 +285,31 @@ export const SyncView: React.FC<SyncViewProps> = ({
     setExportModalOpen(true);
   };
 
-  // Requirement 5: Copy JSON to Clipboard
+  // Requirement 5: Copy JSON to Clipboard using Capacitor Native Clipboard
   const handleCopyJsonToClipboard = async () => {
     try {
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        await navigator.clipboard.writeText(exportedJsonText);
-      } else {
-        const textArea = document.createElement('textarea');
-        textArea.value = exportedJsonText;
-        document.body.appendChild(textArea);
-        textArea.select();
-        document.execCommand('copy');
-        document.body.removeChild(textArea);
-      }
+      await Clipboard.write({ string: exportedJsonText });
       Sound.playSuccessChime();
       setCopiedJson(true);
       setTimeout(() => setCopiedJson(false), 2500);
     } catch {
-      alert('Por favor selecciona el texto del cuadro inferior y cópialo manualmente.');
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(exportedJsonText);
+        } else {
+          const textArea = document.createElement('textarea');
+          textArea.value = exportedJsonText;
+          document.body.appendChild(textArea);
+          textArea.select();
+          document.execCommand('copy');
+          document.body.removeChild(textArea);
+        }
+        Sound.playSuccessChime();
+        setCopiedJson(true);
+        setTimeout(() => setCopiedJson(false), 2500);
+      } catch {
+        alert('Por favor selecciona el texto del cuadro inferior y cópialo manualmente.');
+      }
     }
   };
 
@@ -303,18 +320,61 @@ export const SyncView: React.FC<SyncViewProps> = ({
     setImportModalOpen(true);
   };
 
-  // Requirement 5: Paste from Clipboard into Import Textarea
+  // Requirement 5: Paste from Clipboard using native Capacitor Clipboard and execute local import
   const handlePasteFromClipboard = async () => {
     try {
-      if (navigator.clipboard && navigator.clipboard.readText) {
-        const text = await navigator.clipboard.readText();
-        if (text) {
-          setImportJsonText(text);
-          setImportError(null);
+      let text = '';
+      // 1. Try native Capacitor Clipboard first (works seamlessly on Android without WebView restrictions)
+      try {
+        const result = await Clipboard.read();
+        text = result.value || '';
+      } catch (capErr) {
+        console.warn('Capacitor clipboard read:', capErr);
+      }
+
+      // 2. Web fallback
+      if (!text && typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.readText) {
+        try {
+          text = await navigator.clipboard.readText();
+        } catch (navErr) {
+          console.warn('Navigator clipboard fallback:', navErr);
         }
       }
+
+      if (text && text.trim()) {
+        const cleanText = text.trim();
+        setImportJsonText(cleanText);
+        setImportError(null);
+        Sound.playScanBeep();
+
+        // Check if it's a valid sync JSON and automatically execute import
+        try {
+          const parsed = JSON.parse(cleanText);
+          if (parsed && (parsed.products || parsed.storeCode || parsed.localPendingProducts)) {
+            const res = SyncService.importSyncFile(cleanText);
+            if (res.success) {
+              Sound.playSuccessChime();
+              setImportModalOpen(false);
+              setImportJsonText('');
+              setImportError(null);
+              setMessage({
+                type: 'success',
+                text: `¡Importado con éxito desde el portapapeles! ${res.message}`,
+              });
+              onRefreshData();
+              return;
+            } else {
+              setImportError(res.message);
+            }
+          }
+        } catch {
+          // If not complete JSON, leave text in textarea for user review
+        }
+      } else {
+        setImportError('El portapapeles está vacío o no contiene texto. Copia primero el código JSON del otro dispositivo.');
+      }
     } catch {
-      // User can manually paste into the textarea
+      setImportError('No se pudo leer el portapapeles. Pega el texto manualmente en el cuadro.');
     }
   };
 
