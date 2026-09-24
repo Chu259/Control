@@ -28,6 +28,7 @@ import { SyncService } from '../services/syncService';
 import { StorageService } from '../services/storage';
 import { Sound } from '../services/sound';
 import { NotificationService } from '../services/pushNotifications';
+import { NetworkPermissionService } from '../services/networkPermissions';
 
 interface SyncViewProps {
   products: Product[];
@@ -252,6 +253,17 @@ export const SyncView: React.FC<SyncViewProps> = ({
       });
     } else {
       setFallbackScannerOpen(true);
+    }
+  };
+
+  // Request or re-verify local network / location permissions for Wi-Fi Hotspot peer routing
+  const handleRequestNetworkPermissions = async () => {
+    const res = await NetworkPermissionService.requestPermissionsExplicitly();
+    if (res.granted) {
+      Sound.playSuccessChime();
+      setMessage({ type: 'success', text: res.message });
+    } else {
+      setMessage({ type: 'info', text: res.message });
     }
   };
 
@@ -541,6 +553,35 @@ export const SyncView: React.FC<SyncViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* Local Wi-Fi & Antenna Permission Banner */}
+      <div className="bg-[#131620] border border-teal-500/20 rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-md">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-teal-500/15 text-teal-400 flex items-center justify-center flex-shrink-0">
+            <Wifi className="w-4 h-4" />
+          </div>
+          <div>
+            <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
+              <span>Antena Wi-Fi y Conexión de Red Local</span>
+              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-teal-500/20 text-teal-300 border border-teal-500/30">
+                P2P Offline
+              </span>
+            </h4>
+            <p className="text-[11px] text-zinc-400">
+              Permite a los teléfonos comunicarse mediante la Zona Wi-Fi (Hotspot) para enviar y recibir productos sin internet.
+            </p>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={handleRequestNetworkPermissions}
+          className="px-3 py-1.5 bg-teal-500/20 hover:bg-teal-500/30 text-teal-300 font-semibold text-xs rounded-xl border border-teal-500/30 flex items-center gap-1.5 self-start sm:self-auto transition-colors flex-shrink-0 active:scale-95"
+        >
+          <Wifi className="w-3.5 h-3.5" />
+          <span>Verificar / Activar Permiso</span>
+        </button>
+      </div>
 
       {/* Role Selector Card */}
       <div className="bg-[#161922] border border-white/10 rounded-2xl p-4 shadow-lg">

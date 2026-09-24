@@ -37,6 +37,7 @@ import { Sound } from './services/sound';
 import { checkStockAlert } from './utils/stockAlert';
 import { NotificationService } from './services/pushNotifications';
 import { InAppPushBanner } from './components/InAppPushBanner';
+import { NetworkPermissionService } from './services/networkPermissions';
 
 export default function App() {
   const [products, setProducts] = useState<Product[]>([]);
@@ -114,6 +115,8 @@ export default function App() {
   // Load local data on mount
   useEffect(() => {
     reloadAllData();
+    // Request location / nearby devices permission on startup for local Wi-Fi Hotspot transmission
+    NetworkPermissionService.requestOnStartup();
   }, []);
 
   const reloadAllData = () => {
