@@ -77,3 +77,66 @@ export async function compressImageToIcon(
     reader.readAsDataURL(file);
   });
 }
+
+/**
+ * Strongly compress an existing Base64 / data URL image to a tiny lightweight thumbnail (e.g. 50x50, JPEG 0.35)
+ * for safe syncing across mobile clipboards without exceeding character limits.
+ */
+export function compressDataUrl(
+  dataUrl: string,
+  maxDimension: number = 50,
+  quality: number = 0.35
+): Promise<string> {
+  return new Promise((resolve) => {
+    if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image')) {
+      resolve(dataUrl || '');
+      return;
+    }
+
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onerror = () => {
+      resolve(''); // If invalid or corrupted, return empty string so it doesn't take space
+    };
+
+    img.onload = () => {
+      try {
+        let targetWidth = img.width;
+        let targetHeight = img.height;
+
+        if (targetWidth > targetHeight) {
+          if (targetWidth > maxDimension) {
+            targetHeight = Math.max(1, Math.round((targetHeight * maxDimension) / targetWidth));
+            targetWidth = maxDimension;
+          }
+        } else {
+          if (targetHeight > maxDimension) {
+            targetWidth = Math.max(1, Math.round((targetWidth * maxDimension) / targetHeight));
+            targetHeight = maxDimension;
+          }
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
+
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve('');
+          return;
+        }
+
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'low';
+        ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+
+        const compressed = canvas.toDataURL('image/jpeg', quality);
+        resolve(compressed);
+      } catch {
+        resolve('');
+      }
+    };
+
+    img.src = dataUrl;
+  });
+}

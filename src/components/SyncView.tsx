@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Smartphone,
   RefreshCw,
@@ -22,10 +22,15 @@ import {
   ClipboardPaste,
   FileCode,
   Share2,
+  Upload,
+  Download,
+  ImageOff,
+  CheckCheck,
+  Loader2,
 } from 'lucide-react';
 import { Clipboard } from '@capacitor/clipboard';
 import { DeviceSyncConfig, SyncRole, Product, StockMovement } from '../types';
-import { SyncService } from '../services/syncService';
+import { SyncService, OptimizedExportResult } from '../services/syncService';
 import { StorageService } from '../services/storage';
 import { Sound } from '../services/sound';
 import { NotificationService } from '../services/pushNotifications';
@@ -69,6 +74,17 @@ export const SyncView: React.FC<SyncViewProps> = ({
   const [importJsonText, setImportJsonText] = useState('');
   const [copiedJson, setCopiedJson] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
+  const [forceStripImages, setForceStripImages] = useState(false);
+  const [exportOptState, setExportOptState] = useState<{
+    isGenerating: boolean;
+    isSafeForClipboard: boolean;
+    imagesStripped: boolean;
+    imagesCompressed: boolean;
+    totalChars: number;
+    sizeKB: number;
+    reason?: string;
+  } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Fallback camera reader when onOpenScanner prop is not passed
   const [fallbackScannerOpen, setFallbackScannerOpen] = useState(false);
@@ -277,12 +293,46 @@ export const SyncView: React.FC<SyncViewProps> = ({
     }
   };
 
-  // Requirement 5: Open Export JSON Modal
-  const handleOpenExportModal = () => {
-    const jsonStr = SyncService.getSyncJsonText();
-    setExportedJsonText(jsonStr);
-    setCopiedJson(false);
+  // Requirement 3: Generate Optimized Export JSON (Compresses or strips images to strictly fit under 20,000 characters)
+  const handleOpenExportModal = async (stripImages = false) => {
     setExportModalOpen(true);
+    setCopiedJson(false);
+    setForceStripImages(stripImages);
+    setExportOptState({
+      isGenerating: true,
+      isSafeForClipboard: true,
+      imagesStripped: false,
+      imagesCompressed: false,
+      totalChars: 0,
+      sizeKB: 0,
+    });
+
+    try {
+      const result = await SyncService.generateOptimizedSyncJson({ forceStripImages: stripImages });
+      setExportedJsonText(result.json);
+      setForceStripImages(result.imagesStripped);
+      setExportOptState({
+        isGenerating: false,
+        isSafeForClipboard: result.isSafeForClipboard,
+        imagesStripped: result.imagesStripped,
+        imagesCompressed: result.imagesCompressed,
+        totalChars: result.totalChars,
+        sizeKB: result.sizeKB,
+        reason: result.reason,
+      });
+    } catch {
+      const fallback = SyncService.getSyncJsonText({ stripImages: true });
+      setExportedJsonText(fallback);
+      setForceStripImages(true);
+      setExportOptState({
+        isGenerating: false,
+        isSafeForClipboard: true,
+        imagesStripped: true,
+        imagesCompressed: false,
+        totalChars: fallback.length,
+        sizeKB: Math.round((fallback.length / 1024) * 10) / 10,
+      });
+    }
   };
 
   // Requirement 5: Copy JSON to Clipboard using Capacitor Native Clipboard
@@ -320,26 +370,43 @@ export const SyncView: React.FC<SyncViewProps> = ({
     setImportModalOpen(true);
   };
 
-  // Requirement 5: Paste from Clipboard using native Capacitor Clipboard and execute local import
+  // Requirement 2: Read clipboard with multi-channel support capable of reading > 100,000 characters
+  const readFullClipboardContent = async (): Promise<{ text: string; source: string }> => {
+    let bestText = '';
+    let source = '';
+
+    // Channel 1: Native Capacitor Clipboard plugin
+    try {
+      const capResult = await Clipboard.read();
+      if (capResult && typeof capResult.value === 'string' && capResult.value.length > 0) {
+        bestText = capResult.value;
+        source = 'Capacitor Native';
+      }
+    } catch (capErr) {
+      console.warn('Capacitor clipboard read warning:', capErr);
+    }
+
+    // Channel 2: Navigator Clipboard API (Web standard, handles > 100,000 chars seamlessly in modern WebView)
+    if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.readText) {
+      try {
+        const navText = await navigator.clipboard.readText();
+        // If web clipboard returned more text (e.g. Capacitor was bounded by IPC/ROM), choose the longer one
+        if (navText && navText.length > bestText.length) {
+          bestText = navText;
+          source = 'Navigator Clipboard';
+        }
+      } catch (navErr) {
+        console.warn('Navigator clipboard fallback warning:', navErr);
+      }
+    }
+
+    return { text: bestText, source };
+  };
+
+  // Requirement 2 & 5: Paste from Clipboard using native multi-source reader and execute local import
   const handlePasteFromClipboard = async () => {
     try {
-      let text = '';
-      // 1. Try native Capacitor Clipboard first (works seamlessly on Android without WebView restrictions)
-      try {
-        const result = await Clipboard.read();
-        text = result.value || '';
-      } catch (capErr) {
-        console.warn('Capacitor clipboard read:', capErr);
-      }
-
-      // 2. Web fallback
-      if (!text && typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.readText) {
-        try {
-          text = await navigator.clipboard.readText();
-        } catch (navErr) {
-          console.warn('Navigator clipboard fallback:', navErr);
-        }
-      }
+      const { text, source } = await readFullClipboardContent();
 
       if (text && text.trim()) {
         const cleanText = text.trim();
@@ -347,7 +414,13 @@ export const SyncView: React.FC<SyncViewProps> = ({
         setImportError(null);
         Sound.playScanBeep();
 
-        // Check if it's a valid sync JSON and automatically execute import
+        // Check if string was truncated by Android clipboard at exactly ~20,000 characters
+        if (cleanText.length === 20000 || (cleanText.length >= 19900 && cleanText.length <= 20100 && !cleanText.endsWith('}'))) {
+          setImportError('Atención: El portapapeles de Android cortó el texto a 20,000 caracteres (Unterminated string). En el teléfono emisor, exporta activando "Modo sin fotos" o carga el archivo .json directamente.');
+          return;
+        }
+
+        // Try automatic import
         try {
           const parsed = JSON.parse(cleanText);
           if (parsed && (parsed.products || parsed.storeCode || parsed.localPendingProducts)) {
@@ -359,7 +432,7 @@ export const SyncView: React.FC<SyncViewProps> = ({
               setImportError(null);
               setMessage({
                 type: 'success',
-                text: `¡Importado con éxito desde el portapapeles! ${res.message}`,
+                text: `¡Importado con éxito (${source || 'Portapapeles'})! ${res.message}`,
               });
               onRefreshData();
               return;
@@ -374,8 +447,41 @@ export const SyncView: React.FC<SyncViewProps> = ({
         setImportError('El portapapeles está vacío o no contiene texto. Copia primero el código JSON del otro dispositivo.');
       }
     } catch {
-      setImportError('No se pudo leer el portapapeles. Pega el texto manualmente en el cuadro.');
+      setImportError('No se pudo leer el portapapeles. Pega el texto manualmente en el cuadro o carga el archivo .json.');
     }
+  };
+
+  // Direct file import to bypass any clipboard limitation
+  const handleImportJsonFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const content = event.target?.result as string;
+      if (content && content.trim()) {
+        const clean = content.trim();
+        setImportJsonText(clean);
+        setImportError(null);
+        const res = SyncService.importSyncFile(clean);
+        if (res.success) {
+          Sound.playSuccessChime();
+          setImportModalOpen(false);
+          setImportJsonText('');
+          setMessage({
+            type: 'success',
+            text: `¡Archivo "${file.name}" importado con éxito! ${res.message}`,
+          });
+          onRefreshData();
+        } else {
+          setImportError(res.message);
+        }
+      }
+    };
+    reader.onerror = () => {
+      setImportError('No se pudo leer el archivo seleccionado.');
+    };
+    reader.readAsText(file);
+    e.target.value = '';
   };
 
   // Requirement 5: Process and Apply Imported JSON
@@ -1013,7 +1119,7 @@ export const SyncView: React.FC<SyncViewProps> = ({
           <button
             id="export-sync-file-btn"
             type="button"
-            onClick={handleOpenExportModal}
+            onClick={() => handleOpenExportModal(false)}
             className="flex items-center justify-center gap-2 p-3.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white font-semibold text-xs transition-all active:scale-95"
           >
             <Copy className="w-4 h-4 text-teal-400" />
@@ -1032,10 +1138,10 @@ export const SyncView: React.FC<SyncViewProps> = ({
         </div>
       </div>
 
-      {/* MODAL: EXPORT SYNC JSON (Requirement 5) */}
+      {/* MODAL: EXPORT SYNC JSON (Requirement 3 & 5) */}
       {exportModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-sm p-3 sm:p-4 animate-fade-in">
-          <div className="relative w-full max-w-xl bg-[#161922] border border-white/15 rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+          <div className="relative w-full max-w-xl bg-[#161922] border border-white/15 rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[92vh]">
             {/* Modal Header */}
             <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 bg-[#12141c]">
               <div className="flex items-center gap-2">
@@ -1045,7 +1151,7 @@ export const SyncView: React.FC<SyncViewProps> = ({
                 <div>
                   <h3 className="text-sm font-bold text-white">Copia de Sincronización (JSON)</h3>
                   <p className="text-[11px] text-zinc-400">
-                    Contiene {products.length} productos y {movements.length} movimientos
+                    {products.length} productos y {movements.length} movimientos
                   </p>
                 </div>
               </div>
@@ -1060,49 +1166,134 @@ export const SyncView: React.FC<SyncViewProps> = ({
 
             {/* Modal Body */}
             <div className="p-4 space-y-3 flex-1 overflow-y-auto">
-              <p className="text-xs text-zinc-300">
-                Presiona el botón a continuación para copiar todo el contenido al portapapeles. Luego puedes enviarlo por WhatsApp, Telegram o pegarlo directamente en el otro celular.
-              </p>
+              {exportOptState?.isGenerating ? (
+                <div className="py-12 flex flex-col items-center justify-center gap-3 text-center">
+                  <Loader2 className="w-8 h-8 text-teal-400 animate-spin" />
+                  <p className="text-xs text-zinc-300 font-medium">Optimizando paquete de sincronización...</p>
+                  <p className="text-[11px] text-zinc-500">Ajustando tamaño seguro para evitar cortes en el portapapeles de Android</p>
+                </div>
+              ) : (
+                <>
+                  {/* Status Banner based on Android 20,000 characters threshold */}
+                  {exportOptState?.imagesStripped ? (
+                    <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-start gap-2.5">
+                      <ImageOff className="w-4 h-4 flex-shrink-0 mt-0.5 text-amber-400" />
+                      <div className="space-y-1">
+                        <p className="font-semibold text-white">Modo Seguro para Android Activado (Sin Fotos)</p>
+                        <p className="text-[11px] text-amber-200/90 leading-relaxed">
+                          {exportOptState.reason || 'Para garantizar que el texto no sea cortado a los 20,000 caracteres por el portapapeles de Android, las fotos se omitieron automáticamente.'}
+                        </p>
+                        <p className="text-[10px] text-zinc-400 font-medium">
+                          ✓ Se priorizaron al 100%: Nombre, Código de Barra, Stock, Precios y Movimientos.
+                        </p>
+                      </div>
+                    </div>
+                  ) : exportOptState?.imagesCompressed ? (
+                    <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs flex items-start gap-2.5">
+                      <CheckCircle2 className="w-4 h-4 flex-shrink-0 mt-0.5 text-emerald-400" />
+                      <div className="space-y-1">
+                        <p className="font-semibold text-white">Fotos Comprimidas Fuertemente (Tamaño Seguro)</p>
+                        <p className="text-[11px] text-emerald-200/90 leading-relaxed">
+                          Las fotos se optimizaron en miniaturas ultraligeras. El paquete pesa menos de 20,000 caracteres y no se cortará en el portapapeles.
+                        </p>
+                      </div>
+                    </div>
+                  ) : null}
 
-              <button
-                type="button"
-                id="copy-sync-json-btn"
-                onClick={handleCopyJsonToClipboard}
-                className={`w-full py-3 px-4 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg active:scale-95 ${
-                  copiedJson
-                    ? 'bg-emerald-500 text-black shadow-emerald-500/30'
-                    : 'bg-gradient-to-r from-teal-500 to-emerald-600 hover:from-teal-400 hover:to-emerald-500 text-white shadow-teal-500/20'
-                }`}
-              >
-                {copiedJson ? (
-                  <>
-                    <Check className="w-4 h-4" />
-                    <span>¡Copiado al Portapapeles!</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-4 h-4" />
-                    <span>Copiar al Portapapeles</span>
-                  </>
-                )}
-              </button>
+                  {/* Size & Options Bar */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 bg-white/5 rounded-xl border border-white/5">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] text-zinc-400">Tamaño:</span>
+                      <span className="text-[11px] font-mono font-bold text-white">
+                        {exportedJsonText.length.toLocaleString()} caracteres ({((exportedJsonText.length / 1024).toFixed(1))} KB)
+                      </span>
+                      {exportedJsonText.length <= 20000 ? (
+                        <span className="px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-300 font-semibold">
+                          ✓ Seguro (&lt;20K)
+                        </span>
+                      ) : (
+                        <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-500/20 text-amber-300 font-semibold">
+                          ⚠️ &gt;20K
+                        </span>
+                      )}
+                    </div>
 
-              <div>
-                <label className="text-[11px] font-semibold text-zinc-400 block mb-1">
-                  Texto del archivo JSON:
-                </label>
-                <textarea
-                  readOnly
-                  value={exportedJsonText}
-                  onFocus={(e) => e.target.select()}
-                  rows={8}
-                  className="w-full bg-[#0d1017] border border-white/10 rounded-xl p-3 text-[11px] font-mono text-zinc-300 focus:outline-none focus:border-teal-500 resize-none select-all"
-                />
-              </div>
+                    <button
+                      type="button"
+                      onClick={() => handleOpenExportModal(!forceStripImages)}
+                      className="text-[11px] font-medium text-teal-400 hover:text-teal-300 flex items-center gap-1.5 self-start sm:self-auto px-2 py-1 bg-white/5 hover:bg-white/10 rounded-lg transition-colors"
+                    >
+                      {forceStripImages ? (
+                        <>
+                          <CheckCheck className="w-3.5 h-3.5" />
+                          <span>Intentar incluir fotos</span>
+                        </>
+                      ) : (
+                        <>
+                          <ImageOff className="w-3.5 h-3.5" />
+                          <span>Omitir fotos (Modo Ultraligero)</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  <p className="text-xs text-zinc-300">
+                    Presiona el botón para copiar todo el JSON al portapapeles y pegarlo en el otro dispositivo:
+                  </p>
+
+                  <button
+                    type="button"
+                    id="copy-sync-json-btn"
+                    onClick={handleCopyJsonToClipboard}
+                    className={`w-full py-3 px-4 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg active:scale-95 ${
+                      copiedJson
+                        ? 'bg-emerald-500 text-black shadow-emerald-500/30'
+                        : 'bg-gradient-to-r from-teal-500 to-emerald-600 hover:from-teal-400 hover:to-emerald-500 text-white shadow-teal-500/20'
+                    }`}
+                  >
+                    {copiedJson ? (
+                      <>
+                        <Check className="w-4 h-4" />
+                        <span>¡Copiado al Portapapeles!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-4 h-4" />
+                        <span>Copiar al Portapapeles</span>
+                      </>
+                    )}
+                  </button>
+
+                  <div>
+                    <label className="text-[11px] font-semibold text-zinc-400 block mb-1">
+                      Texto del archivo JSON (sin límite de tamaño):
+                    </label>
+                    <textarea
+                      readOnly
+                      value={exportedJsonText}
+                      onFocus={(e) => e.target.select()}
+                      autoComplete="off"
+                      spellCheck={false}
+                      rows={7}
+                      className="w-full bg-[#0d1017] border border-white/10 rounded-xl p-3 text-[11px] font-mono text-zinc-300 focus:outline-none focus:border-teal-500 resize-none select-all"
+                    />
+                  </div>
+                </>
+              )}
             </div>
 
             {/* Modal Footer */}
-            <div className="flex justify-end p-3 border-t border-white/10 bg-[#12141c]">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 border-t border-white/10 bg-[#12141c]">
+              <button
+                type="button"
+                onClick={() => SyncService.exportSyncFile()}
+                className="flex items-center justify-center gap-1.5 px-3 py-2 bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-white font-medium text-xs rounded-xl transition-colors"
+                title="Descargar archivo .json completo con fotos originales"
+              >
+                <Download className="w-3.5 h-3.5 text-teal-400" />
+                <span>Descargar archivo .sync.json completo</span>
+              </button>
+
               <button
                 type="button"
                 onClick={() => setExportModalOpen(false)}
@@ -1115,10 +1306,19 @@ export const SyncView: React.FC<SyncViewProps> = ({
         </div>
       )}
 
-      {/* MODAL: IMPORT SYNC JSON (Requirement 5) */}
+      {/* MODAL: IMPORT SYNC JSON (Requirement 1, 2 & 5) */}
       {importModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-sm p-3 sm:p-4 animate-fade-in">
-          <div className="relative w-full max-w-xl bg-[#161922] border border-white/15 rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+          <div className="relative w-full max-w-xl bg-[#161922] border border-white/15 rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[92vh]">
+            {/* Hidden native file input for direct JSON file import */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".json,application/json,text/plain"
+              onChange={handleImportJsonFile}
+              className="hidden"
+            />
+
             {/* Modal Header */}
             <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 bg-[#12141c]">
               <div className="flex items-center gap-2">
@@ -1128,7 +1328,7 @@ export const SyncView: React.FC<SyncViewProps> = ({
                 <div>
                   <h3 className="text-sm font-bold text-white">Importar Copia de Sincronización</h3>
                   <p className="text-[11px] text-zinc-400">
-                    Pega el código JSON para restaurar o combinar inventario
+                    Pega el código JSON o carga el archivo para restaurar inventario
                   </p>
                 </div>
               </div>
@@ -1143,30 +1343,107 @@ export const SyncView: React.FC<SyncViewProps> = ({
 
             {/* Modal Body */}
             <div className="p-4 space-y-3 flex-1 overflow-y-auto">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <p className="text-xs text-zinc-300">
-                  Pega aquí el texto JSON copiado desde el otro teléfono:
+                  Elige cómo importar los datos:
                 </p>
-                <button
-                  type="button"
-                  onClick={handlePasteFromClipboard}
-                  className="px-2.5 py-1 bg-white/10 hover:bg-white/20 text-teal-300 font-semibold text-[11px] rounded-lg transition-colors flex items-center gap-1"
-                >
-                  <ClipboardPaste className="w-3.5 h-3.5" />
-                  <span>Pegar desde Portapapeles</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handlePasteFromClipboard}
+                    className="px-2.5 py-1.5 bg-teal-500/20 hover:bg-teal-500/30 text-teal-300 font-semibold text-[11px] rounded-lg transition-colors flex items-center gap-1.5 border border-teal-500/30 active:scale-95"
+                  >
+                    <ClipboardPaste className="w-3.5 h-3.5" />
+                    <span>Pegar Portapapeles</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="px-2.5 py-1.5 bg-white/10 hover:bg-white/20 text-zinc-200 font-semibold text-[11px] rounded-lg transition-colors flex items-center gap-1.5 border border-white/10 active:scale-95"
+                    title="Cargar directamente un archivo .json descargado"
+                  >
+                    <Upload className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Cargar Archivo .json</span>
+                  </button>
+                </div>
               </div>
 
-              <textarea
-                value={importJsonText}
-                onChange={(e) => {
-                  setImportJsonText(e.target.value);
-                  setImportError(null);
-                }}
-                placeholder="Pega aquí el código JSON (comienza con { y termina con })..."
-                rows={9}
-                className="w-full bg-[#0d1017] border border-white/10 rounded-xl p-3 text-[11px] font-mono text-zinc-200 focus:outline-none focus:border-teal-500 resize-none"
-              />
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="text-[11px] font-semibold text-zinc-400 block">
+                    Cuadro de texto JSON:
+                  </label>
+                  {importJsonText.length > 0 && (
+                    <span className="text-[10px] font-mono text-zinc-400">
+                      {importJsonText.length.toLocaleString()} caracteres
+                    </span>
+                  )}
+                </div>
+
+                {/* Requirement 1: Textarea with NO maxlength restriction, and onPaste handling */}
+                <textarea
+                  value={importJsonText}
+                  onChange={(e) => {
+                    setImportJsonText(e.target.value);
+                    setImportError(null);
+                  }}
+                  onPaste={(e) => {
+                    try {
+                      const clipboardData = e.clipboardData;
+                      if (clipboardData) {
+                        const pasted = clipboardData.getData('text/plain') || clipboardData.getData('text');
+                        if (pasted && pasted.length > 0) {
+                          e.preventDefault();
+                          setImportJsonText(pasted);
+                          setImportError(null);
+
+                          // Check if truncated at exactly ~20,000 characters
+                          if (pasted.length === 20000 || (pasted.length >= 19900 && pasted.length <= 20100 && !pasted.endsWith('}'))) {
+                            setImportError('Atención: El portapapeles de Android cortó el texto a 20,000 caracteres (Unterminated string). En el teléfono emisor, exporta activando "Modo sin fotos" o carga el archivo .json directamente.');
+                            return;
+                          }
+
+                          // Auto-validate and import if complete
+                          try {
+                            const parsed = JSON.parse(pasted);
+                            if (parsed && (parsed.products || parsed.storeCode || parsed.localPendingProducts)) {
+                              const res = SyncService.importSyncFile(pasted);
+                              if (res.success) {
+                                Sound.playSuccessChime();
+                                setImportModalOpen(false);
+                                setImportJsonText('');
+                                setMessage({
+                                  type: 'success',
+                                  text: `¡Importado con éxito desde el texto pegado! ${res.message}`,
+                                });
+                                onRefreshData();
+                              } else {
+                                setImportError(res.message);
+                              }
+                            }
+                          } catch {
+                            // Leave in textarea for manual review
+                          }
+                        }
+                      }
+                    } catch (pasteErr) {
+                      console.warn('onPaste capture warning:', pasteErr);
+                    }
+                  }}
+                  placeholder="Pega aquí el código JSON (comienza con { y termina con }). No hay límite de tamaño."
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  spellCheck={false}
+                  rows={8}
+                  className="w-full bg-[#0d1017] border border-white/10 rounded-xl p-3 text-[11px] font-mono text-zinc-200 focus:outline-none focus:border-teal-500 resize-none"
+                />
+              </div>
+
+              <p className="text-[11px] text-zinc-400 leading-relaxed bg-white/5 p-2.5 rounded-xl border border-white/5">
+                💡 <span className="font-semibold text-zinc-300">Consejo para celulares Android:</span> Si el texto se trunca a 20,000 caracteres al transferirlo por WhatsApp o portapapeles, en el otro celular selecciona <strong className="text-teal-300">"Omitir fotos (Modo Ultraligero)"</strong> o carga directamente el archivo <strong className="text-teal-300">.json</strong> con el botón de arriba.
+              </p>
 
               {importError && (
                 <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">

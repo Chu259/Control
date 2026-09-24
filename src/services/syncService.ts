@@ -3,9 +3,22 @@ import { Product, StockMovement, Category, StoreSettings, DeviceSyncConfig, Sync
 import { StorageService } from './storage';
 import { ShoppingService } from './shoppingService';
 import { AuthService } from './authService';
+import { compressDataUrl } from '../utils/imageCompressor';
+
+export interface OptimizedExportResult {
+  json: string;
+  totalChars: number;
+  sizeKB: number;
+  imagesStripped: boolean;
+  imagesCompressed: boolean;
+  isSafeForClipboard: boolean;
+  reason?: string;
+  productCount: number;
+}
 
 const DEFAULT_HOTSPOT_IP = '192.168.43.1';
 const DEFAULT_PORT = 3000;
+const MAX_SAFE_CLIPBOARD_CHARS = 19500; // Limit below Android 20,000 chars clipboard truncation
 
 export const SyncService = {
   // Determine local server URL reliably across Android Hotspot / Capacitor / Localhost
@@ -91,7 +104,7 @@ export const SyncService = {
   },
 
   // Generates complete snapshot payload for synchronization
-  createSyncPayload(): SyncPayload {
+  createSyncPayload(options?: { stripImages?: boolean }): SyncPayload {
     const config = this.getDeviceConfig();
     const currentUser = AuthService.getCurrentUser();
     const localPending = StorageService.getLocalPendingProducts();
@@ -99,12 +112,27 @@ export const SyncService = {
     // Requirement 2: Combine current products with localPendingProducts ensuring no newly created product is lost
     const productsMap = new Map<string, Product>();
     for (const p of StorageService.getProducts()) {
-      productsMap.set(p.id, p);
+      productsMap.set(p.id, { ...p });
     }
     for (const lp of localPending) {
-      productsMap.set(lp.id, lp);
+      productsMap.set(lp.id, { ...lp });
     }
-    const combinedProducts = Array.from(productsMap.values());
+    let combinedProducts = Array.from(productsMap.values());
+    let pendingProductsCopy = localPending.map((p) => ({ ...p }));
+
+    // Strip images if requested or needed for size optimization
+    if (options?.stripImages) {
+      combinedProducts = combinedProducts.map((p) => {
+        const copy = { ...p };
+        delete copy.image;
+        return copy;
+      });
+      pendingProductsCopy = pendingProductsCopy.map((p) => {
+        const copy = { ...p };
+        delete copy.image;
+        return copy;
+      });
+    }
 
     return {
       version: 3,
@@ -116,7 +144,7 @@ export const SyncService = {
       userRole: currentUser?.role || (config.role === 'master' ? 'admin' : 'user'),
       timestamp: new Date().toISOString(),
       products: combinedProducts,
-      localPendingProducts: localPending, // Requirement 1 & 2: Packaged cleanly
+      localPendingProducts: pendingProductsCopy, // Requirement 1 & 2: Packaged cleanly
       movements: StorageService.getMovements(),
       shoppingList: ShoppingService.getShoppingList(),
       replenishmentList: ShoppingService.getReplenishmentList(),
@@ -403,10 +431,164 @@ export const SyncService = {
     }
   },
 
-  // Generates JSON text for clipboard export
-  getSyncJsonText(): string {
+  // Generates JSON text for clipboard export, automatically falling back to lightweight mode if oversized
+  getSyncJsonText(options?: { stripImages?: boolean; compact?: boolean }): string {
+    const shouldStrip = options?.stripImages;
+    if (shouldStrip) {
+      const payload = this.createSyncPayload({ stripImages: true });
+      return options?.compact ? JSON.stringify(payload) : JSON.stringify(payload, null, 2);
+    }
+
     const payload = this.createSyncPayload();
-    return JSON.stringify(payload, null, 2);
+    const formatted = JSON.stringify(payload, null, 2);
+    if (formatted.length > MAX_SAFE_CLIPBOARD_CHARS) {
+      // Exceeds safe limit for Android clipboard (20,000 chars), prioritize product metadata
+      const safePayload = this.createSyncPayload({ stripImages: true });
+      return JSON.stringify(safePayload, null, 2);
+    }
+    return formatted;
+  },
+
+  // Asynchronously generates an optimized JSON package: compresses images strongly to fit under 20,000 chars,
+  // or completely strips images if it still exceeds the limit, prioritizing product data (name, barcode, stock).
+  async generateOptimizedSyncJson(options?: {
+    forceStripImages?: boolean;
+    maxChars?: number;
+  }): Promise<OptimizedExportResult> {
+    const budget = options?.maxChars || MAX_SAFE_CLIPBOARD_CHARS;
+    const config = this.getDeviceConfig();
+    const currentUser = AuthService.getCurrentUser();
+    const localPending = StorageService.getLocalPendingProducts();
+    const allProducts = StorageService.getProducts();
+
+    // Combine current products with localPendingProducts
+    const productsMap = new Map<string, Product>();
+    for (const p of allProducts) {
+      productsMap.set(p.id, { ...p });
+    }
+    for (const lp of localPending) {
+      productsMap.set(lp.id, { ...lp });
+    }
+    const combinedProducts = Array.from(productsMap.values());
+    const totalProductCount = combinedProducts.length;
+
+    // Check if any product has an image
+    const hasAnyImages = combinedProducts.some((p) => Boolean(p.image && p.image.trim().length > 0));
+
+    // Case 1: If forced to strip images, or there are no images at all
+    if (options?.forceStripImages || !hasAnyImages) {
+      const payload = this.createSyncPayload({ stripImages: true });
+      let json = JSON.stringify(payload, null, 2);
+      if (json.length > budget) {
+        // Try compact JSON without whitespace to save ~30%
+        const compact = JSON.stringify(payload);
+        if (compact.length <= budget) {
+          json = compact;
+        }
+      }
+
+      return {
+        json,
+        totalChars: json.length,
+        sizeKB: Math.round((json.length / 1024) * 10) / 10,
+        imagesStripped: hasAnyImages,
+        imagesCompressed: false,
+        isSafeForClipboard: json.length <= 20000,
+        reason: hasAnyImages ? 'Modo sin fotos seleccionado para máxima compatibilidad con el portapapeles de Android.' : undefined,
+        productCount: totalProductCount,
+      };
+    }
+
+    // Case 2: Products have images. Attempt strong compression to tiny thumbnails (50x50, JPEG 0.35)
+    try {
+      const compressedProducts = await Promise.all(
+        combinedProducts.map(async (p) => {
+          if (p.image && p.image.startsWith('data:image')) {
+            const tiny = await compressDataUrl(p.image, 50, 0.35);
+            return { ...p, image: tiny || undefined };
+          }
+          return { ...p };
+        })
+      );
+
+      const compressedPending = await Promise.all(
+        localPending.map(async (lp) => {
+          if (lp.image && lp.image.startsWith('data:image')) {
+            const tiny = await compressDataUrl(lp.image, 50, 0.35);
+            return { ...lp, image: tiny || undefined };
+          }
+          return { ...lp };
+        })
+      );
+
+      const testPayload: SyncPayload = {
+        version: 3,
+        storeCode: config.syncCode.trim().toUpperCase(),
+        role: config.role,
+        deviceId: config.deviceId,
+        deviceName: config.deviceName,
+        userName: currentUser?.name || (config.role === 'client' ? 'Vendedor Móvil' : 'Administrador'),
+        userRole: currentUser?.role || (config.role === 'master' ? 'admin' : 'user'),
+        timestamp: new Date().toISOString(),
+        products: compressedProducts,
+        localPendingProducts: compressedPending,
+        movements: StorageService.getMovements(),
+        shoppingList: ShoppingService.getShoppingList(),
+        replenishmentList: ShoppingService.getReplenishmentList(),
+        categories: StorageService.getCategories(),
+        settings: StorageService.getSettings(),
+      };
+
+      const formattedJson = JSON.stringify(testPayload, null, 2);
+
+      // Check if it fits within the safe 20,000 Android clipboard limit
+      if (formattedJson.length <= budget) {
+        return {
+          json: formattedJson,
+          totalChars: formattedJson.length,
+          sizeKB: Math.round((formattedJson.length / 1024) * 10) / 10,
+          imagesStripped: false,
+          imagesCompressed: true,
+          isSafeForClipboard: true,
+          productCount: totalProductCount,
+        };
+      }
+
+      // Check if compact JSON fits
+      const compactJson = JSON.stringify(testPayload);
+      if (compactJson.length <= budget) {
+        return {
+          json: compactJson,
+          totalChars: compactJson.length,
+          sizeKB: Math.round((compactJson.length / 1024) * 10) / 10,
+          imagesStripped: false,
+          imagesCompressed: true,
+          isSafeForClipboard: true,
+          productCount: totalProductCount,
+        };
+      }
+    } catch (compressErr) {
+      console.warn('Image compression warning during export:', compressErr);
+    }
+
+    // Case 3: Even with compression, payload exceeds budget!
+    // As explicitly requested: prioritize product metadata (name, barcode, stock) by completely stripping images
+    const safePayload = this.createSyncPayload({ stripImages: true });
+    let safeJson = JSON.stringify(safePayload, null, 2);
+    if (safeJson.length > budget) {
+      safeJson = JSON.stringify(safePayload); // Compact
+    }
+
+    return {
+      json: safeJson,
+      totalChars: safeJson.length,
+      sizeKB: Math.round((safeJson.length / 1024) * 10) / 10,
+      imagesStripped: true,
+      imagesCompressed: false,
+      isSafeForClipboard: safeJson.length <= 20000,
+      reason: 'El catálogo con fotos superaba los 20,000 caracteres de Android. Las fotos se omitieron automáticamente para no cortarse, priorizando nombre, código y stock.',
+      productCount: totalProductCount,
+    };
   },
 
   // Export full sync package file (.sync.json)
@@ -424,9 +606,22 @@ export const SyncService = {
   // Import sync package file or raw JSON text
   importSyncFile(fileContent: string): { success: boolean; message: string; count?: number; newProductsCount?: number } {
     try {
-      const payload: SyncPayload = JSON.parse(fileContent);
+      const trimmed = (fileContent || '').trim();
+      if (!trimmed) {
+        return { success: false, message: 'El texto JSON está vacío. Pega o carga un archivo válido.' };
+      }
+
+      // Detect if text was truncated at exactly ~20,000 characters (typical Android Clipboard/ROM cutoff)
+      if (trimmed.length === 20000 || (trimmed.length >= 19900 && trimmed.length <= 20100 && !trimmed.endsWith('}'))) {
+        return {
+          success: false,
+          message: 'Error: El texto fue cortado a los 20,000 caracteres por el portapapeles de Android (Unterminated string at 20000). En el dispositivo emisor, exporta activando la opción "Exportar sin fotos" o transfiérelo cargando el archivo .json directamente.',
+        };
+      }
+
+      const payload: SyncPayload = JSON.parse(trimmed);
       if (!payload.products || !Array.isArray(payload.products)) {
-        return { success: false, message: 'El archivo o texto no contiene una lista de inventario válida' };
+        return { success: false, message: 'El archivo o texto no contiene una lista de inventario válida.' };
       }
 
       // Requirement 1 & 2: Safely combine existing local catalog with incoming products and localPendingProducts
@@ -450,6 +645,8 @@ export const SyncService = {
           currentMap.set(item.id, {
             ...existing,
             ...item,
+            // Preserve existing product photo if incoming payload has no image (due to size optimization)
+            image: item.image || existing.image,
             stock: payload.role === 'master' ? item.stock : existing.stock,
           });
         } else {
@@ -492,7 +689,14 @@ export const SyncService = {
         newProductsCount: newItemsCount,
       };
     } catch (e: any) {
-      return { success: false, message: 'Error al procesar el archivo o texto JSON: ' + e.message };
+      const errStr = e?.message || '';
+      if (errStr.includes('position 20000') || (fileContent && fileContent.length >= 19900 && fileContent.length <= 20100)) {
+        return {
+          success: false,
+          message: 'Error: El texto fue cortado a los 20,000 caracteres por el portapapeles de Android (Unterminated string at position 20000). En el teléfono emisor, exporta activando "Modo sin fotos" o carga el archivo .json directamente.',
+        };
+      }
+      return { success: false, message: 'Error al procesar el archivo o texto JSON: ' + errStr };
     }
   },
 };
