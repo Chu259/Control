@@ -39,6 +39,8 @@ interface ReplenishmentViewProps {
   onOpenMovement?: (product: Product, type: 'in', unitType?: 'unit' | 'bulk', quantity?: number) => void;
   onNavigateToStock: () => void;
   onScanSearch?: (callback: (val: string) => void) => void;
+  onUpdateProduct?: (product: Product) => void;
+  onRefreshData?: () => void;
 }
 
 export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
@@ -49,8 +51,11 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
   onOpenMovement,
   onNavigateToStock,
   onScanSearch,
+  onUpdateProduct,
+  onRefreshData,
 }) => {
   const [items, setItems] = useState<ReplenishmentItem[]>([]);
+  const [activeProducts, setActiveProducts] = useState<Product[]>(() => StorageService.getProducts());
   const [searchFilter, setSearchFilter] = useState('');
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [catalogSearch, setCatalogSearch] = useState('');
@@ -63,13 +68,58 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
   // Local string state for quantity inputs to allow clearing (backspacing) completely and typing numbers smoothly
   const [quantityInputValues, setQuantityInputValues] = useState<Record<string, string>>({});
 
+  const reloadList = () => {
+    const list = ShoppingService.getReplenishmentList();
+    setItems(list);
+    setActiveProducts(StorageService.getProducts());
+  };
+
   useEffect(() => {
     reloadList();
   }, []);
 
-  const reloadList = () => {
-    const list = ShoppingService.getReplenishmentList();
-    setItems(list);
+  // Synchronize when products prop changes or when reposition_updated event fires
+  useEffect(() => {
+    setActiveProducts(StorageService.getProducts());
+  }, [products]);
+
+  useEffect(() => {
+    const handleRepositionEvent = () => {
+      reloadList();
+    };
+    window.addEventListener('reposition_updated', handleRepositionEvent);
+    return () => {
+      window.removeEventListener('reposition_updated', handleRepositionEvent);
+    };
+  }, []);
+
+  // Requirement 1 & 3: Add product to replenishment directly persisting isPendingReposition = true in local DB
+  const handleAddProductToReposition = (product: Product) => {
+    const suggested = computeSuggestedGondola(product);
+    const updated = StorageService.toggleProductReposition(
+      product.id,
+      true,
+      product.notes || 'Reponer en góndola',
+      suggested
+    );
+    if (updated) {
+      if (onUpdateProduct) onUpdateProduct(updated);
+      if (onRefreshData) onRefreshData();
+    }
+    reloadList();
+    Sound.playSuccessChime();
+    setToastMessage(`✓ ${product.name} añadido a Reposición`);
+    setTimeout(() => setToastMessage(null), 3000);
+  };
+
+  // Requirement 1 & 3: Remove product from replenishment persisting isPendingReposition = false
+  const handleRemoveProductFromReposition = (productId: string) => {
+    const updated = StorageService.toggleProductReposition(productId, false);
+    if (updated) {
+      if (onUpdateProduct) onUpdateProduct(updated);
+      if (onRefreshData) onRefreshData();
+    }
+    reloadList();
   };
 
   const getMovementType = (productId: string): 'in' | 'out' => {
@@ -228,9 +278,14 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
       // Play audio feedback
       Sound.playSuccessChime();
 
-      // Automatically mark as completed in replenishment list
+      // Automatically mark as completed in replenishment list and clear product pending flag
       ShoppingService.setReplenishmentStatus(product.id, 'completed');
+      const updatedProduct = StorageService.toggleProductReposition(product.id, false);
+      if (updatedProduct && onUpdateProduct) {
+        onUpdateProduct(updatedProduct);
+      }
       reloadList();
+      if (onRefreshData) onRefreshData();
 
       const unitLabel = isBulk ? (addQty === 1 ? 'Bulto' : 'Bultos') : (product.unit || 'uds');
       setToastMessage(
@@ -244,24 +299,57 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
     }
   };
 
-  const populatedItems = items
-    .map((item) => {
-      const product = products.find((p) => p.id === item.productId);
-      return product ? { item, product } : null;
-    })
-    .filter((x): x is { item: ReplenishmentItem; product: Product } => x !== null);
+  // Requirement 2: Read actively and filter all products that have isPendingReposition === true or exist in items
+  const itemsMap = new Map<string, ReplenishmentItem>();
+  items.forEach((it) => itemsMap.set(it.productId, it));
 
-  const pendingCount = populatedItems.filter(({ item }) => item.status === 'pending').length;
-  const completedCount = populatedItems.filter(({ item }) => item.status === 'completed').length;
+  const allReplenishMap = new Map<string, { item: ReplenishmentItem; product: Product }>();
+
+  // 1. All products that have isPendingReposition === true in local database
+  activeProducts.forEach((p) => {
+    if (p.isPendingReposition) {
+      const existingItem = itemsMap.get(p.id);
+      const repItem: ReplenishmentItem = existingItem || {
+        id: `rep-${p.id}`,
+        productId: p.id,
+        status: 'pending',
+        locationNotes: p.repositionNotes || p.notes || 'Reponer en góndola',
+        suggestedUnits: p.repositionQuantity,
+        addedAt: p.repositionAddedAt || new Date().toISOString(),
+      };
+      allReplenishMap.set(p.id, { item: repItem, product: p });
+    }
+  });
+
+  // 2. Also include any completed items or items stored in ShoppingService
+  items.forEach((it) => {
+    if (!allReplenishMap.has(it.productId)) {
+      const p = activeProducts.find((prod) => prod.id === it.productId);
+      if (p) {
+        allReplenishMap.set(p.id, { item: it, product: p });
+      }
+    }
+  });
+
+  const populatedItems = Array.from(allReplenishMap.values());
+
+  const pendingCount = populatedItems.filter(
+    ({ item, product }) => product.isPendingReposition === true || item.status === 'pending'
+  ).length;
+  const completedCount = populatedItems.filter(
+    ({ item, product }) => !product.isPendingReposition && item.status === 'completed'
+  ).length;
 
   const filteredItems = populatedItems.filter(({ item, product }) => {
-    if (statusFilter !== 'all' && item.status !== statusFilter) return false;
+    const isPending = product.isPendingReposition === true || item.status === 'pending';
+    if (statusFilter === 'pending' && !isPending) return false;
+    if (statusFilter === 'completed' && isPending) return false;
     if (!searchFilter.trim()) return true;
-    const q = searchFilter.toLowerCase();
+    const q = searchFilter.toLowerCase().trim();
     return (
       product.name.toLowerCase().includes(q) ||
-      (product.barcodeUnit || product.barcode).includes(q) ||
-      (product.barcodeBulk && product.barcodeBulk.includes(q)) ||
+      (product.barcodeUnit || product.barcode || '').toLowerCase().includes(q) ||
+      (product.barcodeBulk && product.barcodeBulk.toLowerCase().includes(q)) ||
       (item.locationNotes && item.locationNotes.toLowerCase().includes(q))
     );
   });
@@ -276,32 +364,52 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
 
     let added = 0;
     lowStockProducts.forEach((p) => {
-      if (!items.some((item) => item.productId === p.id)) {
+      if (!p.isPendingReposition) {
         const suggested = computeSuggestedGondola(p);
-        ShoppingService.addToReplenishmentList(p.id, p.notes || 'Reponer en góndola', suggested);
+        const updated = StorageService.toggleProductReposition(p.id, true, p.notes || 'Reponer en góndola', suggested);
+        if (updated && onUpdateProduct) {
+          onUpdateProduct(updated);
+        }
         added++;
       }
     });
 
     reloadList();
-    setToastMessage(`Se añadieron ${added} productos con stock mínimo.`);
+    if (onRefreshData) onRefreshData();
+    setToastMessage(`Se añadieron ${added} productos con stock mínimo a Reposición.`);
     setTimeout(() => setToastMessage(null), 3500);
   };
 
   const handleToggleStatus = (productId: string) => {
+    const product = products.find((p) => p.id === productId);
+    const item = itemsMap.get(productId);
+    const willBePending = item?.status === 'completed' || !product?.isPendingReposition;
+    const updated = StorageService.toggleProductReposition(productId, willBePending);
+    if (updated && onUpdateProduct) {
+      onUpdateProduct(updated);
+    }
     ShoppingService.toggleReplenishmentStatus(productId);
     reloadList();
+    if (onRefreshData) onRefreshData();
   };
 
   const handleRemove = (productId: string) => {
-    ShoppingService.removeFromReplenishmentList(productId);
-    reloadList();
+    handleRemoveProductFromReposition(productId);
   };
 
   const handleClear = () => {
     if (confirm('¿Vaciar toda la lista de reposición?')) {
+      products.forEach((p) => {
+        if (p.isPendingReposition) {
+          const updated = StorageService.toggleProductReposition(p.id, false);
+          if (updated && onUpdateProduct) {
+            onUpdateProduct(updated);
+          }
+        }
+      });
       ShoppingService.clearReplenishmentList();
       reloadList();
+      if (onRefreshData) onRefreshData();
     }
   };
 
@@ -786,18 +894,21 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
             </div>
 
             <div className="p-2 space-y-1.5 overflow-y-auto flex-1">
-              {products
+              {activeProducts
                 .filter((p) => {
                   if (!catalogSearch.trim()) return true;
-                  const q = catalogSearch.toLowerCase();
+                  const q = catalogSearch.toLowerCase().trim();
                   return (
                     p.name.toLowerCase().includes(q) ||
-                    (p.barcodeUnit || p.barcode).includes(q) ||
-                    (p.barcodeBulk && p.barcodeBulk.includes(q))
+                    (p.barcodeUnit || p.barcode || '').toLowerCase().includes(q) ||
+                    (p.barcodeBulk && p.barcodeBulk.toLowerCase().includes(q))
                   );
                 })
                 .map((product) => {
-                  const alreadyInList = items.some((item) => item.productId === product.id);
+                  const alreadyInList = Boolean(
+                    product.isPendingReposition === true ||
+                    items.some((item) => item.productId === product.id && item.status === 'pending')
+                  );
                   return (
                     <div
                       key={product.id}
@@ -826,11 +937,9 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
                       <button
                         onClick={() => {
                           if (alreadyInList) {
-                            handleRemove(product.id);
+                            handleRemoveProductFromReposition(product.id);
                           } else {
-                            const suggested = computeSuggestedGondola(product);
-                            ShoppingService.addToReplenishmentList(product.id, product.notes, suggested);
-                            reloadList();
+                            handleAddProductToReposition(product);
                           }
                         }}
                         className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1 ${

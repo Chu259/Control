@@ -137,8 +137,42 @@ export default function App() {
   // Low stock counter (Dual alert: unidad o bulto por debajo del mínimo)
   const lowStockCount = products.filter((p) => checkStockAlert(p, settings.defaultMinStock).isLow).length;
 
+  // Requirement 1, 2 & 3: Real-time reposition pending count reflecting isPendingReposition = true
+  const repositionPendingCount = products.filter((p) => p.isPendingReposition === true).length;
+
   // New products added by other users (pending admin review)
   const newProductsFromUsers = products.filter((p) => p.isNewFromUser && !p.reviewedByAdmin);
+
+  // Sync state immediately when any component changes reposition status
+  useEffect(() => {
+    const handleRepositionUpdate = (e: any) => {
+      const updatedProd = e.detail?.product as Product | undefined;
+      if (updatedProd) {
+        setProducts((prev) =>
+          prev.map((p) => (p.id === updatedProd.id ? { ...p, ...updatedProd } : p))
+        );
+        if (detailProduct && detailProduct.id === updatedProd.id) {
+          setDetailProduct((prev) => (prev ? { ...prev, ...updatedProd } : null));
+        }
+      } else {
+        setProducts(StorageService.getProducts());
+      }
+    };
+    window.addEventListener('reposition_updated', handleRepositionUpdate);
+    return () => {
+      window.removeEventListener('reposition_updated', handleRepositionUpdate);
+    };
+  }, [detailProduct]);
+
+  // Handler to update a single product state across all open views
+  const handleUpdateProduct = (updatedProduct: Product) => {
+    setProducts((prev) =>
+      prev.map((p) => (p.id === updatedProduct.id ? updatedProduct : p))
+    );
+    if (detailProduct && detailProduct.id === updatedProduct.id) {
+      setDetailProduct(updatedProduct);
+    }
+  };
 
   // Filtered products list for inventory view
   const filteredProducts = products.filter((p) => {
@@ -523,6 +557,8 @@ export default function App() {
               onRecordMovement={handleRecordMovement}
               onNavigateToStock={() => setCurrentTab('inventory')}
               onScanSearch={handleOpenSearchScannerFor}
+              onUpdateProduct={handleUpdateProduct}
+              onRefreshData={reloadAllData}
             />
           )}
 
@@ -593,6 +629,7 @@ export default function App() {
           currentTab={currentTab}
           onTabChange={setCurrentTab}
           lowStockCount={lowStockCount}
+          repositionCount={repositionPendingCount}
           onLogout={handleLogout}
           onOpenScanner={() => {
             setScanTarget(null);
@@ -664,6 +701,7 @@ export default function App() {
             setEditingProduct(prod);
             setProductFormOpen(true);
           }}
+          onUpdateProduct={handleUpdateProduct}
         />
 
         {/* User Login & Authentication Modal */}

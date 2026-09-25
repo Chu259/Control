@@ -1,6 +1,7 @@
 import { Product, StockMovement, Category, StoreSettings, MovementType, MovementReason, UserRole } from '../types';
 import { INITIAL_PRODUCTS, INITIAL_CATEGORIES, INITIAL_SETTINGS } from '../data/initialData';
 import { AuthService } from './authService';
+import { ShoppingService } from './shoppingService';
 
 const STORAGE_KEYS = {
   PRODUCTS: 'stock_app_products_v1',
@@ -208,6 +209,68 @@ export const StorageService = {
     return products;
   },
 
+  // Requirement 1 & 2: Toggle or set product reposition state and persist directly in database
+  toggleProductReposition(productId: string, isPending?: boolean, notes?: string, quantity?: number): Product | null {
+    const products = this.getProducts();
+    let product = products.find((p) => p.id === productId);
+
+    const localPending = this.getLocalPendingProducts();
+    const lpIndex = localPending.findIndex((p) => p.id === productId);
+
+    if (!product && lpIndex >= 0) {
+      product = { ...localPending[lpIndex] };
+      products.unshift(product);
+    }
+
+    if (!product) return null;
+
+    const newStatus = isPending !== undefined ? Boolean(isPending) : !product.isPendingReposition;
+    product.isPendingReposition = newStatus;
+
+    if (newStatus) {
+      product.repositionNotes = notes || product.notes || 'Reponer en góndola';
+      if (quantity && quantity > 0) product.repositionQuantity = quantity;
+      product.repositionAddedAt = new Date().toISOString();
+      ShoppingService.addToReplenishmentList(productId, product.repositionNotes, product.repositionQuantity);
+    } else {
+      product.repositionAddedAt = undefined;
+      ShoppingService.removeFromReplenishmentList(productId);
+    }
+
+    this.saveProducts(products);
+
+    if (lpIndex >= 0) {
+      localPending[lpIndex].isPendingReposition = newStatus;
+      if (newStatus) {
+        localPending[lpIndex].repositionNotes = product.repositionNotes;
+        localPending[lpIndex].repositionQuantity = product.repositionQuantity;
+        localPending[lpIndex].repositionAddedAt = product.repositionAddedAt;
+      } else {
+        localPending[lpIndex].repositionAddedAt = undefined;
+      }
+      this.saveLocalPendingProducts(localPending);
+    }
+
+    // Notify listeners so views and badge counters update immediately
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('reposition_updated', {
+          detail: { productId, isPending: newStatus, product },
+        })
+      );
+    }
+
+    return { ...product };
+  },
+
+  getRepositionProducts(): Product[] {
+    const products = this.getProducts();
+    const repList = ShoppingService.getReplenishmentList();
+    const repPendingIds = new Set(repList.filter((item) => item.status === 'pending').map((item) => item.productId));
+
+    return products.filter((p) => p.isPendingReposition === true || repPendingIds.has(p.id));
+  },
+
   // Lookup product with detection whether barcode matched unit or bulk pack
   findProductByBarcode(barcode: string): { product: Product; matchType: 'unit' | 'bulk' } | undefined {
     const trimmed = barcode.trim();
@@ -320,18 +383,7 @@ export const StorageService = {
       const data = localStorage.getItem(STORAGE_KEYS.MOVEMENTS);
       if (!data) return [];
       const parsed: StockMovement[] = JSON.parse(data);
-      const allowedBarcodes = new Set(['7790503000272', '7791579069323']);
-      const allowedIds = new Set(['prod-1789964939522', 'prod-1789957711181']);
-      const filtered = parsed.filter((m) =>
-        allowedIds.has(m.productId) ||
-        (m.barcode && allowedBarcodes.has(m.barcode)) ||
-        m.productName.toLowerCase().includes('queso snack') ||
-        m.productName.toLowerCase().includes('perita molto')
-      );
-      if (filtered.length !== parsed.length) {
-        localStorage.setItem(STORAGE_KEYS.MOVEMENTS, JSON.stringify(filtered));
-      }
-      return filtered;
+      return Array.isArray(parsed) ? parsed : [];
     } catch {
       return [];
     }

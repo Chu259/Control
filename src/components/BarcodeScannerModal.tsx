@@ -1,8 +1,102 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, X, Flashlight, RefreshCw, Barcode, CheckCircle2, ArrowRight } from 'lucide-react';
+import { Camera, X, Flashlight, RefreshCw, Barcode as BarcodeIcon, CheckCircle2, ArrowRight, AlertTriangle, Sparkles } from 'lucide-react';
 import { Product } from '../types';
 import { Sound } from '../services/sound';
 import { StorageService } from '../services/storage';
+
+// Explicit MLKit barcode formats matching Android MLKit Barcode.FORMAT_*
+export const Barcode = {
+  FORMAT_ITF: 'itf',
+  FORMAT_EAN_13: 'ean_13',
+  FORMAT_CODE_128: 'code_128',
+  FORMAT_UPC_A: 'upc_a',
+  FORMAT_EAN_8: 'ean_8',
+  FORMAT_UPC_E: 'upc_e',
+  FORMAT_QR_CODE: 'qr_code',
+} as const;
+
+export interface BarcodeScannerOptions {
+  formats: string[];
+}
+
+// Strict checksum and sanity validator for commercial barcodes
+export function validateBarcodeSanity(code: string): { valid: boolean; format: string; error?: string } {
+  const clean = code.trim();
+  if (!clean || clean.length < 4) {
+    return { valid: false, format: 'unknown', error: 'Código demasiado corto o incompleto' };
+  }
+
+  // 1. ITF-14 (14 digits) standard for boxes/bulks (e.g. Cañuelas, Natura, sopas)
+  if (/^\d{14}$/.test(clean)) {
+    let sum = 0;
+    for (let i = 0; i < 13; i++) {
+      const digit = parseInt(clean[i], 10);
+      const weight = i % 2 === 0 ? 3 : 1;
+      sum += digit * weight;
+    }
+    const checkDigit = (10 - (sum % 10)) % 10;
+    const providedCheck = parseInt(clean[13], 10);
+    if (checkDigit !== providedCheck) {
+      return { valid: false, format: 'ITF-14', error: `Dígito verificador inválido en ITF-14 (calculado ${checkDigit}, leído ${providedCheck})` };
+    }
+    return { valid: true, format: 'ITF-14' };
+  }
+
+  // 2. EAN-13 (13 digits)
+  if (/^\d{13}$/.test(clean)) {
+    let sum = 0;
+    for (let i = 0; i < 12; i++) {
+      const digit = parseInt(clean[i], 10);
+      const weight = i % 2 === 0 ? 1 : 3;
+      sum += digit * weight;
+    }
+    const checkDigit = (10 - (sum % 10)) % 10;
+    const providedCheck = parseInt(clean[12], 10);
+    if (checkDigit !== providedCheck) {
+      return { valid: false, format: 'EAN-13', error: `Dígito verificador inválido en EAN-13 (calculado ${checkDigit}, leído ${providedCheck})` };
+    }
+    return { valid: true, format: 'EAN-13' };
+  }
+
+  // 3. UPC-A (12 digits)
+  if (/^\d{12}$/.test(clean)) {
+    let sum = 0;
+    for (let i = 0; i < 11; i++) {
+      const digit = parseInt(clean[i], 10);
+      const weight = i % 2 === 0 ? 3 : 1;
+      sum += digit * weight;
+    }
+    const checkDigit = (10 - (sum % 10)) % 10;
+    const providedCheck = parseInt(clean[11], 10);
+    if (checkDigit !== providedCheck) {
+      return { valid: false, format: 'UPC-A', error: `Dígito verificador inválido en UPC-A (calculado ${checkDigit}, leído ${providedCheck})` };
+    }
+    return { valid: true, format: 'UPC-A' };
+  }
+
+  // 4. EAN-8 (8 digits)
+  if (/^\d{8}$/.test(clean)) {
+    let sum = 0;
+    for (let i = 0; i < 7; i++) {
+      const digit = parseInt(clean[i], 10);
+      const weight = i % 2 === 0 ? 3 : 1;
+      sum += digit * weight;
+    }
+    const checkDigit = (10 - (sum % 10)) % 10;
+    const providedCheck = parseInt(clean[7], 10);
+    if (checkDigit !== providedCheck) {
+      return { valid: false, format: 'EAN-8', error: `Dígito verificador inválido en EAN-8` };
+    }
+    return { valid: true, format: 'EAN-8' };
+  }
+
+  // 5. Code 128 (alphanumeric logistics barcodes)
+  if (/^[A-Za-z0-9\-_./]{4,40}$/.test(clean)) {
+    return { valid: true, format: 'CODE-128' };
+  }
+
+  return { valid: false, format: 'unknown', error: 'Formato o caracteres no válidos para código comercial' };
+}
 
 interface BarcodeScannerModalProps {
   isOpen: boolean;
@@ -28,6 +122,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
   scanTarget,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
@@ -38,8 +133,12 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
     product?: Product;
     matchType?: 'unit' | 'bulk';
   } | null>(null);
-  const [scanningActive, setScanningActive] = useState(false);
+  const [scanWarning, setScanWarning] = useState<string | null>(null);
+  const [highContrastFilter, setHighContrastFilter] = useState(true);
   const scanLoopRef = useRef<number | null>(null);
+
+  // Multi-frame consensus tracking to prevent phantom/partial misreads on damaged barcodes
+  const frameCandidateRef = useRef<{ code: string; count: number; timestamp: number } | null>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -52,7 +151,9 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
       stopCamera();
       setLastScanned(null);
       setDetectedInfo(null);
+      setScanWarning(null);
       setManualCode('');
+      frameCandidateRef.current = null;
     }
     return () => {
       document.body.classList.remove('barcode-scanner-active');
@@ -61,23 +162,51 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
     };
   }, [isOpen]);
 
+  // Requirement 2: High resolution mode (1080p Full HD) + continuous autofocus and exposure
   const startCamera = async () => {
     setCameraError(null);
+    setScanWarning(null);
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         throw new Error('La cámara no está disponible en este dispositivo o navegador.');
       }
 
-      const mediaStream = await navigator.mediaDevices.getUserMedia({
+      // Configure high resolution and continuous autofocus constraints
+      const constraints: MediaStreamConstraints = {
         video: {
           facingMode: { ideal: 'environment' },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
+          width: { ideal: 1920, min: 1280 },
+          height: { ideal: 1080, min: 720 },
         },
         audio: false,
-      });
+      };
 
+      const mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
       setStream(mediaStream);
+
+      // Force continuous autofocus, continuous exposure, and max contrast for green barcodes on cardboard
+      const track = mediaStream.getVideoTracks()[0];
+      if (track) {
+        try {
+          const capabilities: any = track.getCapabilities ? track.getCapabilities() : {};
+          const advanced: any = {};
+          if (capabilities.focusMode && Array.isArray(capabilities.focusMode) && capabilities.focusMode.includes('continuous')) {
+            advanced.focusMode = 'continuous';
+          }
+          if (capabilities.exposureMode && Array.isArray(capabilities.exposureMode) && capabilities.exposureMode.includes('continuous')) {
+            advanced.exposureMode = 'continuous';
+          }
+          if (capabilities.whiteBalanceMode && Array.isArray(capabilities.whiteBalanceMode) && capabilities.whiteBalanceMode.includes('continuous')) {
+            advanced.whiteBalanceMode = 'continuous';
+          }
+          if (Object.keys(advanced).length > 0) {
+            await (track as any).applyConstraints({ advanced: [advanced] });
+          }
+        } catch (e) {
+          console.warn('Could not apply continuous autofocus constraints:', e);
+        }
+      }
+
       if (videoRef.current) {
         videoRef.current.srcObject = mediaStream;
         videoRef.current.setAttribute('playsinline', 'true');
@@ -125,10 +254,39 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
     }
   };
 
+  // Requirement 3: Multi-frame consensus & Damaged Barcode rejection
   const handleBarcodeFound = (code: string) => {
     const trimmed = code.trim();
     if (!trimmed || trimmed === lastScanned) return;
 
+    // Sanity check format & check digit
+    const sanity = validateBarcodeSanity(trimmed);
+    if (!sanity.valid) {
+      setScanWarning(`⚠️ ${sanity.error || 'Código dañado o no legible'}. Por favor re-escanea enfocando el código completo.`);
+      frameCandidateRef.current = null;
+      return;
+    }
+
+    // If scanning for a bulk item (or ITF-14), check if a partial shorter read occurred
+    if (scanTarget === 'bulk') {
+      // In bulk mode, if a 13-digit code was read but registered product has an ITF-14 (14 digits) or vice versa
+      const catalogMatch = StorageService.findProductByBarcode(trimmed);
+      if (!catalogMatch) {
+        // If not in catalog, double check multi-frame consensus
+        const candidate = frameCandidateRef.current;
+        const now = Date.now();
+        if (!candidate || candidate.code !== trimmed || now - candidate.timestamp > 800) {
+          // First sighting: require second confirming frame
+          frameCandidateRef.current = { code: trimmed, count: 1, timestamp: now };
+          return;
+        } else if (candidate.count < 2) {
+          // Confirmed across multiple frames!
+          frameCandidateRef.current = { code: trimmed, count: candidate.count + 1, timestamp: now };
+        }
+      }
+    }
+
+    setScanWarning(null);
     setLastScanned(trimmed);
     Sound.playScanBeep();
 
@@ -143,20 +301,65 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
     }, 450);
   };
 
-  // MLKit native barcode detector when available in Android WebView/Chromium
-  const startDetectionLoop = () => {
-    setScanningActive(true);
+  // Contrast enhancement filter for green barcodes on cardboard (e.g. Natura, Cañuelas)
+  // Green ink absorbs red light strongly while brown cardboard reflects red light strongly.
+  // Extracting and contrast-stretching the Red channel makes green ink jet-black and cardboard bright white!
+  const processCardboardGreenContrast = (
+    ctx: CanvasRenderingContext2D,
+    width: number,
+    height: number
+  ) => {
+    try {
+      const imgData = ctx.getImageData(0, 0, width, height);
+      const data = imgData.data;
+      for (let i = 0; i < data.length; i += 4) {
+        const r = data[i];     // Red
+        const g = data[i + 1]; // Green
+        // Green ink on brown cardboard:
+        // Brown cardboard has high Red (~180-220) and moderate Green (~140-180).
+        // Green ink has very low Red (~30-60) and high Green (~130-190).
+        // Difference (R - G/2) separates green ink from kraft paper sharply
+        let val = r * 1.4 - g * 0.4;
+        if (val < 90) {
+          val = 0; // Dark ink
+        } else if (val > 150) {
+          val = 255; // Bright cardboard
+        } else {
+          val = (val - 90) * (255 / 60);
+        }
+        data[i] = val;
+        data[i + 1] = val;
+        data[i + 2] = val;
+      }
+      ctx.putImageData(imgData, 0, 0);
+    } catch {}
+  };
 
+  // Requirement 1: Explicitly configure BarcodeScannerOptions with all heavy bulk formats:
+  // Barcode.FORMAT_ITF, Barcode.FORMAT_EAN_13, Barcode.FORMAT_CODE_128, Barcode.FORMAT_UPC_A
+  const startDetectionLoop = () => {
     let barcodeDetector: any = null;
     if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
       try {
-        barcodeDetector = new window.BarcodeDetector({
-          formats: ['ean_13', 'ean_8', 'code_128', 'qr_code', 'upc_a', 'upc_e'],
-        });
-      } catch {
+        const options: BarcodeScannerOptions = {
+          formats: [
+            Barcode.FORMAT_ITF,
+            Barcode.FORMAT_EAN_13,
+            Barcode.FORMAT_CODE_128,
+            Barcode.FORMAT_UPC_A,
+            Barcode.FORMAT_EAN_8,
+            Barcode.FORMAT_UPC_E,
+            Barcode.FORMAT_QR_CODE,
+          ],
+        };
+        barcodeDetector = new window.BarcodeDetector(options);
+      } catch (err) {
+        console.warn('BarcodeDetector initialization fallback:', err);
         barcodeDetector = null;
       }
     }
+
+    let frameCount = 0;
 
     const checkFrame = async () => {
       if (!videoRef.current || videoRef.current.readyState < 2) {
@@ -164,9 +367,32 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
         return;
       }
 
+      frameCount++;
+
       if (barcodeDetector) {
         try {
-          const barcodes = await barcodeDetector.detect(videoRef.current);
+          // 1. Direct video detect
+          let barcodes = await barcodeDetector.detect(videoRef.current);
+
+          // 2. If nothing detected and scanning cardboard / bulk or every 3rd frame,
+          // run contrast enhanced canvas (for green on brown cardboard like Cañuelas or Natura)
+          if ((!barcodes || barcodes.length === 0) && (scanTarget === 'bulk' || highContrastFilter || frameCount % 3 === 0)) {
+            const video = videoRef.current;
+            const canvas = canvasRef.current || document.createElement('canvas');
+            canvasRef.current = canvas;
+
+            const cw = 480;
+            const ch = Math.round((video.videoHeight / (video.videoWidth || 1)) * cw) || 320;
+            canvas.width = cw;
+            canvas.height = ch;
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+            if (ctx) {
+              ctx.drawImage(video, 0, 0, cw, ch);
+              processCardboardGreenContrast(ctx, cw, ch);
+              barcodes = await barcodeDetector.detect(canvas);
+            }
+          }
+
           if (barcodes && barcodes.length > 0) {
             const rawValue = barcodes[0].rawValue;
             if (rawValue) {
@@ -190,6 +416,13 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
     if (manualCode.trim()) {
       handleBarcodeFound(manualCode.trim());
     }
+  };
+
+  const handleRetryScan = () => {
+    setScanWarning(null);
+    setLastScanned(null);
+    frameCandidateRef.current = null;
+    startDetectionLoop();
   };
 
   if (!isOpen) return null;
@@ -326,6 +559,37 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
                 <RefreshCw className="w-3.5 h-3.5" />
                 <span>Reintentar Cámara</span>
               </button>
+            </div>
+          )}
+
+          {/* Damaged or Unclear Barcode Warning Modal overlay */}
+          {scanWarning && (
+            <div className="absolute inset-0 bg-black/90 flex flex-col items-center justify-center p-4 z-30 animate-fade-in text-center">
+              <div className="w-12 h-12 rounded-2xl bg-amber-500/20 border border-amber-500/40 text-amber-400 flex items-center justify-center mb-2.5 animate-pulse">
+                <AlertTriangle className="w-6 h-6" />
+              </div>
+              <p className="text-sm font-bold text-white mb-1">Código Dañado o No Claro</p>
+              <p className="text-xs text-amber-300 max-w-xs mb-3 px-2 leading-relaxed">
+                {scanWarning}
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleRetryScan}
+                  className="px-4 py-2 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-lg shadow-amber-500/20 transition-all"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Re-escanear Código</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={toggleTorch}
+                  className="px-3 py-2 bg-white/10 hover:bg-white/15 text-zinc-300 font-semibold rounded-xl text-xs flex items-center gap-1 transition-colors border border-white/10"
+                >
+                  <Flashlight className="w-3.5 h-3.5" />
+                  <span>{torchOn ? 'Apagar Luz' : 'Encender Luz'}</span>
+                </button>
+              </div>
             </div>
           )}
 

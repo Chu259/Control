@@ -10,12 +10,7 @@ export const ShoppingService = {
       const data = localStorage.getItem(SHOPPING_STORAGE_KEY);
       if (!data) return [];
       const parsed: ShoppingListItem[] = JSON.parse(data);
-      const allowedIds = new Set(['prod-1789964939522', 'prod-1789957711181']);
-      const filtered = parsed.filter((item) => allowedIds.has(item.productId));
-      if (filtered.length !== parsed.length) {
-        localStorage.setItem(SHOPPING_STORAGE_KEY, JSON.stringify(filtered));
-      }
-      return filtered;
+      return Array.isArray(parsed) ? parsed : [];
     } catch {
       return [];
     }
@@ -55,12 +50,7 @@ export const ShoppingService = {
       const data = localStorage.getItem(REPLENISHMENT_STORAGE_KEY);
       if (!data) return [];
       const parsed: ReplenishmentItem[] = JSON.parse(data);
-      const allowedIds = new Set(['prod-1789964939522', 'prod-1789957711181']);
-      const filtered = parsed.filter((item) => allowedIds.has(item.productId));
-      if (filtered.length !== parsed.length) {
-        localStorage.setItem(REPLENISHMENT_STORAGE_KEY, JSON.stringify(filtered));
-      }
-      return filtered;
+      return Array.isArray(parsed) ? parsed : [];
     } catch {
       return [];
     }

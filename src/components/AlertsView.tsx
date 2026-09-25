@@ -15,6 +15,7 @@ import { Product, StoreSettings } from '../types';
 import { Sound } from '../services/sound';
 import { checkStockAlert } from '../utils/stockAlert';
 import { ShoppingService } from '../services/shoppingService';
+import { StorageService } from '../services/storage';
 
 interface AlertsViewProps {
   products: Product[];
@@ -53,7 +54,7 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
   };
 
   const handleAddReplenish = (productId: string, productName: string) => {
-    ShoppingService.addToReplenishmentList(productId, 'Alerta de stock bajo');
+    StorageService.toggleProductReposition(productId, true, 'Alerta de stock bajo');
     setActionNotice(`"${productName}" añadido a la Lista de Reposición.`);
     setTimeout(() => setActionNotice(null), 3000);
   };

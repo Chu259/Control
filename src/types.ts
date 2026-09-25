@@ -20,6 +20,11 @@ export interface Product {
   image?: string; // Data URL icon stored in local APK DB
   notes?: string;
   lastUpdated: string;
+  // Reposition status
+  isPendingReposition?: boolean;
+  repositionQuantity?: number;
+  repositionNotes?: string;
+  repositionAddedAt?: string;
   // Multi-device sync tracking
   isNewFromUser?: boolean;
   addedByDeviceId?: string;

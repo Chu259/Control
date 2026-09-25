@@ -20,6 +20,8 @@ import {
 import { Product, StockMovement, MovementType } from '../types';
 import { checkStockAlert } from '../utils/stockAlert';
 import { ShoppingService } from '../services/shoppingService';
+import { StorageService } from '../services/storage';
+import { Sound } from '../services/sound';
 
 interface ProductDetailModalProps {
   isOpen: boolean;
@@ -29,6 +31,7 @@ interface ProductDetailModalProps {
   movements: StockMovement[];
   onOpenMovement: (product: Product, type: MovementType, unitType?: 'unit' | 'bulk') => void;
   onEdit: (product: Product) => void;
+  onUpdateProduct?: (product: Product) => void;
 }
 
 export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
@@ -38,21 +41,29 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   movements,
   onOpenMovement,
   onEdit,
+  onUpdateProduct,
 }) => {
   const [copiedField, setCopiedField] = useState<'unit' | 'bulk' | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [currentProduct, setCurrentProduct] = useState<Product | null>(product);
+
+  React.useEffect(() => {
+    setCurrentProduct(product);
+  }, [product]);
 
   if (!isOpen || !product) return null;
 
+  const displayProd = currentProduct || product;
+
   const productMovements = movements
-    .filter((m) => m.productId === product.id)
+    .filter((m) => m.productId === displayProd.id)
     .slice(0, 10);
 
-  const alertStatus = checkStockAlert(product);
-  const unitsPerBulk = Math.max(1, product.unitsPerBulk || 12);
-  const bulkUnitName = product.bulkUnitName || `Caja x${unitsPerBulk}`;
-  const fullBulks = Math.floor(product.stock / unitsPerBulk);
-  const looseUnits = product.stock % unitsPerBulk;
+  const alertStatus = checkStockAlert(displayProd);
+  const unitsPerBulk = Math.max(1, displayProd.unitsPerBulk || 12);
+  const bulkUnitName = displayProd.bulkUnitName || `Caja x${unitsPerBulk}`;
+  const fullBulks = Math.floor(displayProd.stock / unitsPerBulk);
+  const looseUnits = displayProd.stock % unitsPerBulk;
 
   const handleCopy = (text: string, field: 'unit' | 'bulk') => {
     navigator.clipboard.writeText(text);
@@ -61,14 +72,26 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   };
 
   const handleAddToShopping = () => {
-    ShoppingService.addToShoppingList(product.id, 'Agregado desde detalle');
+    ShoppingService.addToShoppingList(displayProd.id, 'Agregado desde detalle');
     setActionNotice('¡Añadido a Lista de Compras!');
     setTimeout(() => setActionNotice(null), 2500);
   };
 
   const handleAddToReplenishment = () => {
-    ShoppingService.addToReplenishmentList(product.id, product.notes || 'Reponer en góndola');
-    setActionNotice('¡Añadido a Lista de Reposición!');
+    const isNowPending = !displayProd.isPendingReposition;
+    const updated = StorageService.toggleProductReposition(
+      displayProd.id,
+      isNowPending,
+      displayProd.notes || 'Reponer en góndola'
+    );
+    if (updated) {
+      setCurrentProduct({ ...updated });
+      if (onUpdateProduct) {
+        onUpdateProduct(updated);
+      }
+    }
+    setActionNotice(isNowPending ? '¡Añadido a Lista de Reposición!' : 'Quitado de Lista de Reposición');
+    Sound.playSuccessChime();
     setTimeout(() => setActionNotice(null), 2500);
   };
 
@@ -267,11 +290,16 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
 
               <button
                 type="button"
+                id="detail-add-replenishment-btn"
                 onClick={handleAddToReplenishment}
-                className="py-1.5 px-2 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 text-xs font-semibold flex items-center justify-center gap-1.5 border border-emerald-500/30 transition-colors"
+                className={`py-1.5 px-2 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 border transition-all ${
+                  displayProd.isPendingReposition
+                    ? 'bg-emerald-500 text-white border-emerald-400 shadow-md shadow-emerald-500/20'
+                    : 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border-emerald-500/30'
+                }`}
               >
                 <Boxes className="w-3.5 h-3.5" />
-                <span>Añadir a Reposición</span>
+                <span>{displayProd.isPendingReposition ? 'En Reposición (✓)' : 'Añadir a Reposición'}</span>
               </button>
             </div>
 
