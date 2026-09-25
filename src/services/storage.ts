@@ -43,7 +43,9 @@ export const StorageService = {
   },
 
   removeLocalPendingProduct(productId: string): void {
-    const list = this.getLocalPendingProducts().filter((p) => p.id !== productId);
+    const list = this.getLocalPendingProducts().filter(
+      (p) => p.id !== productId && p.barcodeUnit !== productId && p.barcode !== productId
+    );
     this.saveLocalPendingProducts(list);
   },
 
@@ -200,6 +202,31 @@ export const StorageService = {
 
   getNewUserProducts(): Product[] {
     return this.getProducts().filter((p) => p.isNewFromUser && !p.reviewedByAdmin);
+  },
+
+  rejectPendingProduct(productId: string): Product[] {
+    this.removeLocalPendingProduct(productId);
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.PRODUCTS);
+      if (raw) {
+        const parsed: Product[] = JSON.parse(raw);
+        const filtered = parsed.filter((p) => p.id !== productId && p.barcodeUnit !== productId && p.barcode !== productId);
+        localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(filtered));
+      }
+    } catch {}
+    const products = this.getProducts().filter((p) => p.id !== productId && p.barcodeUnit !== productId && p.barcode !== productId);
+    this.saveProducts(products);
+    try {
+      ShoppingService.removeFromReplenishmentList(productId);
+    } catch {}
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('reposition_updated', {
+          detail: { productId, isPending: false },
+        })
+      );
+    }
+    return products;
   },
 
   deleteProduct(productId: string): Product[] {

@@ -19,6 +19,7 @@ import {
   Barcode,
   Camera,
   X,
+  Trash2,
   ClipboardPaste,
   FileCode,
   Share2,
@@ -58,6 +59,7 @@ export const SyncView: React.FC<SyncViewProps> = ({
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
   const [syncing, setSyncing] = useState(false);
   const [approvingId, setApprovingId] = useState<string | null>(null);
+  const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [message, setMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
   const [copiedCode, setCopiedCode] = useState(false);
   const [storeCodeInput, setStoreCodeInput] = useState(config.syncCode || 'TIENDA-7894');
@@ -525,6 +527,54 @@ export const SyncView: React.FC<SyncViewProps> = ({
     }
   };
 
+  // Reject a single user-added product from review (deletes without incorporating into catalog)
+  const handleRejectProduct = async (productId: string, productName: string) => {
+    setRejectingId(productId);
+    try {
+      // 1. Remove locally immediately
+      StorageService.rejectPendingProduct(productId);
+      
+      // 2. Sync deletion with master server if reachable
+      try {
+        await SyncService.rejectProduct(productId);
+      } catch (netErr) {
+        console.warn('Network sync for reject failed, already removed locally:', netErr);
+      }
+
+      Sound.playWarningBeep();
+      onRefreshData();
+      setMessage({
+        type: 'info',
+        text: `Producto "${productName}" rechazado y eliminado definitivamente.`,
+      });
+    } catch (err: any) {
+      // Fallback: ensure local product is deleted anyway
+      StorageService.rejectPendingProduct(productId);
+      onRefreshData();
+      setMessage({ type: 'info', text: `Producto "${productName}" eliminado.` });
+    } finally {
+      setRejectingId(null);
+    }
+  };
+
+  // Reject all pending user products from review
+  const handleRejectAllProducts = async () => {
+    if (!newProductsFromUsers.length) return;
+    const count = newProductsFromUsers.length;
+    for (const p of newProductsFromUsers) {
+      StorageService.rejectPendingProduct(p.id);
+      try {
+        await SyncService.rejectProduct(p.id);
+      } catch {}
+    }
+    Sound.playWarningBeep();
+    onRefreshData();
+    setMessage({
+      type: 'info',
+      text: `Se rechazaron y eliminaron los ${count} productos pendientes de revisión.`,
+    });
+  };
+
   // Approve all pending user products
   const handleApproveAllProducts = async () => {
     for (const p of newProductsFromUsers) {
@@ -638,14 +688,27 @@ export const SyncView: React.FC<SyncViewProps> = ({
               </div>
             </div>
 
-            <button
-              id="approve-all-user-products-btn"
-              onClick={handleApproveAllProducts}
-              className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-black font-bold text-xs rounded-xl transition-all shadow-md active:scale-95 flex items-center gap-1.5 self-start sm:self-auto"
-            >
-              <Check className="w-3.5 h-3.5" />
-              <span>Aprobar Todos</span>
-            </button>
+            <div className="flex items-center gap-2 self-start sm:self-auto">
+              <button
+                id="reject-all-user-products-btn"
+                type="button"
+                onClick={handleRejectAllProducts}
+                className="px-3 py-1.5 bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/40 font-semibold text-xs rounded-xl transition-all shadow-sm active:scale-95 flex items-center gap-1.5"
+                title="Rechazar y eliminar todos los productos pendientes de la lista"
+              >
+                <X className="w-3.5 h-3.5" />
+                <span>✕ Rechazar Todos</span>
+              </button>
+              <button
+                id="approve-all-user-products-btn"
+                type="button"
+                onClick={handleApproveAllProducts}
+                className="px-3 py-1.5 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold text-xs rounded-xl transition-all shadow-md active:scale-95 flex items-center gap-1.5"
+              >
+                <Check className="w-3.5 h-3.5" />
+                <span>✓ Aprobar Todos</span>
+              </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
@@ -704,15 +767,41 @@ export const SyncView: React.FC<SyncViewProps> = ({
                     <strong className="text-teal-400">{prod.stock} uds</strong>
                   </div>
 
-                  <button
-                    id={`approve-prod-${prod.id}`}
-                    onClick={() => handleApproveProduct(prod.id)}
-                    disabled={approvingId === prod.id}
-                    className="px-3 py-1 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-semibold text-xs rounded-lg shadow-sm transition-all disabled:opacity-50 flex items-center gap-1"
-                  >
-                    <Check className="w-3 h-3" />
-                    <span>{approvingId === prod.id ? 'Aprobando...' : 'Aprobar Producto'}</span>
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {/* Red Reject/Delete button: compact square button with trash icon */}
+                    <button
+                      id={`reject-prod-${prod.id}`}
+                      type="button"
+                      onClick={() => handleRejectProduct(prod.id, prod.name)}
+                      disabled={rejectingId === prod.id || approvingId === prod.id}
+                      className="w-9 h-9 bg-rose-600 hover:bg-rose-500 active:scale-95 text-white rounded-lg shadow-sm border border-rose-500 transition-all disabled:opacity-50 flex items-center justify-center flex-shrink-0"
+                      title="Rechazar y eliminar definitivamente de la lista"
+                      aria-label="Rechazar y eliminar"
+                    >
+                      {rejectingId === prod.id ? (
+                        <Loader2 className="w-4 h-4 animate-spin text-white" />
+                      ) : (
+                        <Trash2 className="w-4 h-4 text-white" />
+                      )}
+                    </button>
+
+                    {/* Green Approve button */}
+                    <button
+                      id={`approve-prod-${prod.id}`}
+                      type="button"
+                      onClick={() => handleApproveProduct(prod.id)}
+                      disabled={approvingId === prod.id || rejectingId === prod.id}
+                      className="h-9 px-3.5 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold text-xs rounded-lg shadow-sm border border-emerald-400/30 transition-all disabled:opacity-50 flex items-center gap-1.5 active:scale-95"
+                      title="Aprobar e incorporar al catálogo maestro"
+                    >
+                      {approvingId === prod.id ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Check className="w-3.5 h-3.5" />
+                      )}
+                      <span>{approvingId === prod.id ? 'Aprobando...' : '✓ Aprobar'}</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}

@@ -1,5 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, X, Flashlight, RefreshCw, Barcode as BarcodeIcon, CheckCircle2, ArrowRight, AlertTriangle, Sparkles } from 'lucide-react';
+import {
+  Camera,
+  X,
+  Flashlight,
+  RefreshCw,
+  Barcode as BarcodeIcon,
+  CheckCircle2,
+  ArrowRight,
+  AlertTriangle,
+  Sparkles,
+  Image as ImageIcon,
+  Loader2,
+} from 'lucide-react';
 import { Product } from '../types';
 import { Sound } from '../services/sound';
 import { StorageService } from '../services/storage';
@@ -134,18 +146,46 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
     matchType?: 'unit' | 'bulk';
   } | null>(null);
   const [scanWarning, setScanWarning] = useState<string | null>(null);
-  const [highContrastFilter, setHighContrastFilter] = useState(true);
+  const [highContrastFilter, setHighContrastFilter] = useState(false);
   const scanLoopRef = useRef<number | null>(null);
+  const galleryInputRef = useRef<HTMLInputElement | null>(null);
+  const [analyzingGallery, setAnalyzingGallery] = useState(false);
+  const barcodeDetectorRef = useRef<any>(null);
+  const isProcessingRef = useRef(false);
 
-  // Multi-frame consensus tracking to prevent phantom/partial misreads on damaged barcodes
-  const frameCandidateRef = useRef<{ code: string; count: number; timestamp: number } | null>(null);
+  // Returns or instantiates MLKit BarcodeDetector configured with all bulk & unit formats
+  const getBarcodeDetector = () => {
+    if (barcodeDetectorRef.current) return barcodeDetectorRef.current;
+    if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
+      try {
+        const options: BarcodeScannerOptions = {
+          formats: [
+            Barcode.FORMAT_ITF,
+            Barcode.FORMAT_EAN_13,
+            Barcode.FORMAT_CODE_128,
+            Barcode.FORMAT_UPC_A,
+            Barcode.FORMAT_EAN_8,
+            Barcode.FORMAT_UPC_E,
+            Barcode.FORMAT_QR_CODE,
+          ],
+        };
+        barcodeDetectorRef.current = new window.BarcodeDetector(options);
+      } catch (err) {
+        console.warn('BarcodeDetector initialization fallback:', err);
+        barcodeDetectorRef.current = null;
+      }
+    }
+    return barcodeDetectorRef.current;
+  };
 
   useEffect(() => {
     if (isOpen) {
+      isProcessingRef.current = false;
       document.body.classList.add('barcode-scanner-active');
       document.documentElement.classList.add('barcode-scanner-active');
       startCamera();
     } else {
+      isProcessingRef.current = false;
       document.body.classList.remove('barcode-scanner-active');
       document.documentElement.classList.remove('barcode-scanner-active');
       stopCamera();
@@ -153,7 +193,6 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
       setDetectedInfo(null);
       setScanWarning(null);
       setManualCode('');
-      frameCandidateRef.current = null;
     }
     return () => {
       document.body.classList.remove('barcode-scanner-active');
@@ -162,10 +201,11 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
     };
   }, [isOpen]);
 
-  // Requirement 2: High resolution mode (1080p Full HD) + continuous autofocus and exposure
+  // High resolution mode (1080p Full HD) + continuous autofocus and exposure
   const startCamera = async () => {
     setCameraError(null);
     setScanWarning(null);
+    isProcessingRef.current = false;
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         throw new Error('La cámara no está disponible en este dispositivo o navegador.');
@@ -184,7 +224,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
       const mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
       setStream(mediaStream);
 
-      // Force continuous autofocus, continuous exposure, and max contrast for green barcodes on cardboard
+      // Force continuous autofocus, continuous exposure
       const track = mediaStream.getVideoTracks()[0];
       if (track) {
         try {
@@ -254,150 +294,60 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
     }
   };
 
-  // Requirement 3: Multi-frame consensus & Damaged Barcode rejection
-  const handleBarcodeFound = (code: string) => {
+  // Same smooth, direct barcode processing logic for both Unit and Bulk
+  const handleBarcodeFound = (code: string): boolean => {
     const trimmed = code.trim();
-    if (!trimmed || trimmed === lastScanned) return;
+    if (!trimmed || isProcessingRef.current || trimmed === lastScanned) return false;
 
-    // Sanity check format & check digit
-    const sanity = validateBarcodeSanity(trimmed);
-    if (!sanity.valid) {
-      setScanWarning(`⚠️ ${sanity.error || 'Código dañado o no legible'}. Por favor re-escanea enfocando el código completo.`);
-      frameCandidateRef.current = null;
-      return;
-    }
+    if (trimmed.length < 3) return false;
 
-    // If scanning for a bulk item (or ITF-14), check if a partial shorter read occurred
-    if (scanTarget === 'bulk') {
-      // In bulk mode, if a 13-digit code was read but registered product has an ITF-14 (14 digits) or vice versa
-      const catalogMatch = StorageService.findProductByBarcode(trimmed);
-      if (!catalogMatch) {
-        // If not in catalog, double check multi-frame consensus
-        const candidate = frameCandidateRef.current;
-        const now = Date.now();
-        if (!candidate || candidate.code !== trimmed || now - candidate.timestamp > 800) {
-          // First sighting: require second confirming frame
-          frameCandidateRef.current = { code: trimmed, count: 1, timestamp: now };
-          return;
-        } else if (candidate.count < 2) {
-          // Confirmed across multiple frames!
-          frameCandidateRef.current = { code: trimmed, count: candidate.count + 1, timestamp: now };
-        }
-      }
-    }
-
+    isProcessingRef.current = true;
     setScanWarning(null);
     setLastScanned(trimmed);
     Sound.playScanBeep();
 
+    if (scanLoopRef.current) {
+      cancelAnimationFrame(scanLoopRef.current);
+      scanLoopRef.current = null;
+    }
+
     const lookup = StorageService.findProductByBarcode(trimmed);
     const matchedProduct = lookup?.product;
-    const matchType = lookup?.matchType || (scanTarget ? scanTarget : 'unit');
+    // Target variable: bulk or unit as chosen by the user
+    const matchType = scanTarget || (lookup?.matchType || 'unit');
 
     setDetectedInfo({ product: matchedProduct, matchType });
 
     setTimeout(() => {
       onBarcodeDetected(trimmed, matchedProduct, matchType);
+      isProcessingRef.current = false;
     }, 450);
+
+    return true;
   };
 
-  // Contrast enhancement filter for green barcodes on cardboard (e.g. Natura, Cañuelas)
-  // Green ink absorbs red light strongly while brown cardboard reflects red light strongly.
-  // Extracting and contrast-stretching the Red channel makes green ink jet-black and cardboard bright white!
-  const processCardboardGreenContrast = (
-    ctx: CanvasRenderingContext2D,
-    width: number,
-    height: number
-  ) => {
-    try {
-      const imgData = ctx.getImageData(0, 0, width, height);
-      const data = imgData.data;
-      for (let i = 0; i < data.length; i += 4) {
-        const r = data[i];     // Red
-        const g = data[i + 1]; // Green
-        // Green ink on brown cardboard:
-        // Brown cardboard has high Red (~180-220) and moderate Green (~140-180).
-        // Green ink has very low Red (~30-60) and high Green (~130-190).
-        // Difference (R - G/2) separates green ink from kraft paper sharply
-        let val = r * 1.4 - g * 0.4;
-        if (val < 90) {
-          val = 0; // Dark ink
-        } else if (val > 150) {
-          val = 255; // Bright cardboard
-        } else {
-          val = (val - 90) * (255 / 60);
-        }
-        data[i] = val;
-        data[i + 1] = val;
-        data[i + 2] = val;
-      }
-      ctx.putImageData(imgData, 0, 0);
-    } catch {}
-  };
-
-  // Requirement 1: Explicitly configure BarcodeScannerOptions with all heavy bulk formats:
-  // Barcode.FORMAT_ITF, Barcode.FORMAT_EAN_13, Barcode.FORMAT_CODE_128, Barcode.FORMAT_UPC_A
+  // Exact same high-performance, non-blocking MLKit engine for BOTH units and bulks
   const startDetectionLoop = () => {
-    let barcodeDetector: any = null;
-    if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
-      try {
-        const options: BarcodeScannerOptions = {
-          formats: [
-            Barcode.FORMAT_ITF,
-            Barcode.FORMAT_EAN_13,
-            Barcode.FORMAT_CODE_128,
-            Barcode.FORMAT_UPC_A,
-            Barcode.FORMAT_EAN_8,
-            Barcode.FORMAT_UPC_E,
-            Barcode.FORMAT_QR_CODE,
-          ],
-        };
-        barcodeDetector = new window.BarcodeDetector(options);
-      } catch (err) {
-        console.warn('BarcodeDetector initialization fallback:', err);
-        barcodeDetector = null;
-      }
-    }
-
-    let frameCount = 0;
+    const barcodeDetector = getBarcodeDetector();
 
     const checkFrame = async () => {
+      if (isProcessingRef.current) return;
+
       if (!videoRef.current || videoRef.current.readyState < 2) {
         scanLoopRef.current = requestAnimationFrame(checkFrame);
         return;
       }
 
-      frameCount++;
-
       if (barcodeDetector) {
         try {
-          // 1. Direct video detect
-          let barcodes = await barcodeDetector.detect(videoRef.current);
-
-          // 2. If nothing detected and scanning cardboard / bulk or every 3rd frame,
-          // run contrast enhanced canvas (for green on brown cardboard like Cañuelas or Natura)
-          if ((!barcodes || barcodes.length === 0) && (scanTarget === 'bulk' || highContrastFilter || frameCount % 3 === 0)) {
-            const video = videoRef.current;
-            const canvas = canvasRef.current || document.createElement('canvas');
-            canvasRef.current = canvas;
-
-            const cw = 480;
-            const ch = Math.round((video.videoHeight / (video.videoWidth || 1)) * cw) || 320;
-            canvas.width = cw;
-            canvas.height = ch;
-            const ctx = canvas.getContext('2d', { willReadFrequently: true });
-            if (ctx) {
-              ctx.drawImage(video, 0, 0, cw, ch);
-              processCardboardGreenContrast(ctx, cw, ch);
-              barcodes = await barcodeDetector.detect(canvas);
-            }
-          }
-
+          const barcodes = await barcodeDetector.detect(videoRef.current);
           if (barcodes && barcodes.length > 0) {
             const rawValue = barcodes[0].rawValue;
             if (rawValue) {
-              handleBarcodeFound(rawValue);
-              return;
+              const handled = handleBarcodeFound(rawValue);
+              if (handled) {
+                return; // Stop animation loop cleanly on successful read
+              }
             }
           }
         } catch {
@@ -411,6 +361,158 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
     scanLoopRef.current = requestAnimationFrame(checkFrame);
   };
 
+  // Helper for gallery photos: enhances contrast on green/cardboard packaging
+  const processCardboardGreenContrast = (
+    ctx: CanvasRenderingContext2D,
+    width: number,
+    height: number
+  ) => {
+    try {
+      const imgData = ctx.getImageData(0, 0, width, height);
+      const data = imgData.data;
+      for (let i = 0; i < data.length; i += 4) {
+        const r = data[i];
+        const g = data[i + 1];
+        let val = r * 1.4 - g * 0.4;
+        if (val < 90) {
+          val = 0;
+        } else if (val > 150) {
+          val = 255;
+        } else {
+          val = (val - 90) * (255 / 60);
+        }
+        data[i] = val;
+        data[i + 1] = val;
+        data[i + 2] = val;
+      }
+      ctx.putImageData(imgData, 0, 0);
+    } catch {}
+  };
+
+  // Open native mobile photo gallery
+  const handleOpenGallery = () => {
+    setScanWarning(null);
+    galleryInputRef.current?.click();
+  };
+
+  // Scan barcode directly from selected gallery photo / screenshot using MLKit
+  const handleGalleryImageSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setAnalyzingGallery(true);
+    setScanWarning(null);
+
+    try {
+      const reader = new FileReader();
+      reader.onload = async (readerEvent) => {
+        const dataUrl = readerEvent.target?.result as string;
+        if (!dataUrl) {
+          setAnalyzingGallery(false);
+          setScanWarning('No se pudo leer la foto seleccionada.');
+          return;
+        }
+
+        const img = new window.Image();
+        img.onload = async () => {
+          try {
+            const detector = getBarcodeDetector();
+            let rawCode: string | null = null;
+
+            if (detector) {
+              // 1. Direct detection on the full image element
+              try {
+                const barcodes = await detector.detect(img);
+                if (barcodes && barcodes.length > 0 && barcodes[0].rawValue) {
+                  rawCode = barcodes[0].rawValue;
+                }
+              } catch (err) {
+                console.warn('Direct detect error on image, trying canvas:', err);
+              }
+
+              // 2. If nothing detected, render to canvas (handles EXIF, high resolution, contrast enhancement)
+              if (!rawCode) {
+                const canvas = document.createElement('canvas');
+                const maxDim = 1920;
+                let w = img.naturalWidth || img.width;
+                let h = img.naturalHeight || img.height;
+                if (w > maxDim || h > maxDim) {
+                  if (w > h) {
+                    h = Math.round((h * maxDim) / w);
+                    w = maxDim;
+                  } else {
+                    w = Math.round((w * maxDim) / h);
+                    h = maxDim;
+                  }
+                }
+                canvas.width = w;
+                canvas.height = h;
+                const ctx = canvas.getContext('2d', { willReadFrequently: true });
+                if (ctx) {
+                  ctx.drawImage(img, 0, 0, w, h);
+                  // Normal canvas detect
+                  try {
+                    const cBarcodes = await detector.detect(canvas);
+                    if (cBarcodes && cBarcodes.length > 0 && cBarcodes[0].rawValue) {
+                      rawCode = cBarcodes[0].rawValue;
+                    }
+                  } catch {}
+
+                  // High-contrast / green-on-cardboard filter
+                  if (!rawCode) {
+                    processCardboardGreenContrast(ctx, w, h);
+                    try {
+                      const contrastBarcodes = await detector.detect(canvas);
+                      if (contrastBarcodes && contrastBarcodes.length > 0 && contrastBarcodes[0].rawValue) {
+                        rawCode = contrastBarcodes[0].rawValue;
+                      }
+                    } catch {}
+                  }
+                }
+              }
+            }
+
+            if (rawCode) {
+              setAnalyzingGallery(false);
+              handleBarcodeFound(rawCode);
+            } else {
+              setAnalyzingGallery(false);
+              setScanWarning(
+                'No se detectó ningún código de barras en la foto o captura. Asegúrate de que las barras estén nítidas y completas.'
+              );
+              Sound.playWarningBeep();
+            }
+          } catch (err: any) {
+            setAnalyzingGallery(false);
+            setScanWarning('Error al procesar la foto con MLKit: ' + (err?.message || 'Error desconocido'));
+          } finally {
+            if (galleryInputRef.current) galleryInputRef.current.value = '';
+          }
+        };
+
+        img.onerror = () => {
+          setAnalyzingGallery(false);
+          setScanWarning('No se pudo cargar la imagen seleccionada desde la galería.');
+          if (galleryInputRef.current) galleryInputRef.current.value = '';
+        };
+
+        img.src = dataUrl;
+      };
+
+      reader.onerror = () => {
+        setAnalyzingGallery(false);
+        setScanWarning('Error al leer el archivo de la galería.');
+        if (galleryInputRef.current) galleryInputRef.current.value = '';
+      };
+
+      reader.readAsDataURL(file);
+    } catch (err: any) {
+      setAnalyzingGallery(false);
+      setScanWarning('Error al abrir la foto: ' + (err?.message || 'Error desconocido'));
+      if (galleryInputRef.current) galleryInputRef.current.value = '';
+    }
+  };
+
   const handleManualSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (manualCode.trim()) {
@@ -419,9 +521,9 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
   };
 
   const handleRetryScan = () => {
+    isProcessingRef.current = false;
     setScanWarning(null);
     setLastScanned(null);
-    frameCandidateRef.current = null;
     startDetectionLoop();
   };
 
@@ -468,6 +570,31 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
             </div>
           </div>
           <div className="flex items-center gap-1">
+            {/* Hidden file input for native image/screenshot selection */}
+            <input
+              ref={galleryInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={handleGalleryImageSelected}
+            />
+
+            <button
+              id="scanner-gallery-btn"
+              type="button"
+              onClick={handleOpenGallery}
+              disabled={analyzingGallery}
+              className="p-2 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 text-teal-400 hover:text-teal-300 transition-colors flex items-center gap-1.5"
+              title="Abrir Galería de Fotos / Capturas"
+            >
+              {analyzingGallery ? (
+                <Loader2 className="w-4 h-4 animate-spin text-teal-400" />
+              ) : (
+                <ImageIcon className="w-4 h-4" />
+              )}
+              <span className="hidden sm:inline text-xs font-semibold">Galería</span>
+            </button>
+
             <button
               id="scanner-torch-btn"
               onClick={toggleTorch}
@@ -498,6 +625,17 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
             muted
             className={`w-full h-full object-cover ${cameraActive ? 'opacity-100' : 'opacity-0'}`}
           />
+
+          {/* Gallery Image Analyzing Spinner */}
+          {analyzingGallery && (
+            <div className="absolute inset-0 bg-black/90 flex flex-col items-center justify-center p-4 z-40 animate-fade-in text-center">
+              <div className="w-12 h-12 rounded-2xl bg-teal-500/20 border border-teal-500/40 text-teal-400 flex items-center justify-center mb-2.5">
+                <Loader2 className="w-6 h-6 animate-spin text-teal-400" />
+              </div>
+              <p className="text-sm font-bold text-white mb-0.5">Analizando Imagen...</p>
+              <p className="text-xs text-zinc-400">Leyendo códigos de barra con motor MLKit</p>
+            </div>
+          )}
 
           {/* Scanner Overlay Laser & Frame */}
           <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center p-6">
@@ -539,9 +677,23 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
                 }`}
               />
             </div>
-            <p className="text-[11px] text-zinc-300 bg-black/60 backdrop-blur-md px-3 py-1 rounded-full mt-3 font-medium border border-white/10">
-              {scanTarget === 'bulk' ? '📦 Enfoca el código del BULTO / CAJA' : '🏷️ Apunta al código de la unidad o bulto'}
-            </p>
+            
+            <div className="flex items-center gap-2 mt-3 pointer-events-auto">
+              <p className="text-[11px] text-zinc-300 bg-black/60 backdrop-blur-md px-3 py-1 rounded-full font-medium border border-white/10">
+                {scanTarget === 'bulk' ? '📦 Enfoca el código del BULTO / CAJA' : '🏷️ Apunta al código de la unidad o bulto'}
+              </p>
+              <button
+                type="button"
+                id="viewfinder-gallery-btn"
+                onClick={handleOpenGallery}
+                disabled={analyzingGallery}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-teal-500/20 hover:bg-teal-500/30 text-teal-300 backdrop-blur-md border border-teal-500/40 text-[11px] font-semibold transition-all active:scale-95 shadow-md"
+                title="Escanear desde foto o captura en galería"
+              >
+                <ImageIcon className="w-3.5 h-3.5" />
+                <span>Galería</span>
+              </button>
+            </div>
           </div>
 
           {/* Camera Error / Fallback info */}
@@ -615,6 +767,30 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
               )}
             </div>
           )}
+        </div>
+
+        {/* Gallery Barcode Scan Action Bar */}
+        <div className="px-4 py-2.5 bg-[#12141c] border-b border-white/5 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <div className="w-6 h-6 rounded-lg bg-teal-500/20 text-teal-400 flex items-center justify-center">
+              <ImageIcon className="w-3.5 h-3.5" />
+            </div>
+            <span className="text-[11px] text-zinc-300">¿Tienes una foto o captura?</span>
+          </div>
+          <button
+            type="button"
+            id="bar-gallery-scan-btn"
+            onClick={handleOpenGallery}
+            disabled={analyzingGallery}
+            className="px-3 py-1.5 rounded-xl bg-teal-500/15 hover:bg-teal-500/25 border border-teal-500/30 text-teal-300 text-xs font-semibold flex items-center gap-1.5 transition-all active:scale-95 shadow-sm"
+          >
+            {analyzingGallery ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-teal-400" />
+            ) : (
+              <ImageIcon className="w-3.5 h-3.5" />
+            )}
+            <span>Escanear desde Galería</span>
+          </button>
         </div>
 
         {/* Manual Input Form & Quick Demo */}

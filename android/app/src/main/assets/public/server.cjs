@@ -434,6 +434,27 @@ async function startServer() {
       newProductsAlerts: store.newProductsAlerts
     });
   });
+  app.post("/api/sync/store/:storeCode/reject-product/:productId", (req, res) => {
+    const code = req.params.storeCode.toUpperCase();
+    const productId = req.params.productId;
+    const store = getOrCreateStore(code);
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    const initialCount = (store.products || []).length;
+    store.products = (store.products || []).filter((p) => p.id !== productId);
+    const found = store.products.length < initialCount;
+    store.newProductsAlerts = (store.newProductsAlerts || []).filter((id) => id !== productId);
+    store.version = (store.version || 1) + 1;
+    store.lastUpdated = now;
+    syncStoreMap.set(code, store);
+    savePersistedSync(code, store);
+    res.json({
+      success: true,
+      productId,
+      found,
+      message: "Producto rechazado y eliminado de la lista de revisi\xF3n.",
+      newProductsAlerts: store.newProductsAlerts
+    });
+  });
   app.post("/api/sync/store/:storeCode/movements", (req, res) => {
     const code = req.params.storeCode.toUpperCase();
     const { deviceId, deviceName, movements, userName, userRole } = req.body;

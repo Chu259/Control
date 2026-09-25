@@ -109,6 +109,10 @@ class AudioService {
     }
   }
 
+  playWarningBeep(): void {
+    this.playWarningTone();
+  }
+
   // Double chime for push notification & alerts
   playNotificationChime(): void {
     try {

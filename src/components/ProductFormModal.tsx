@@ -111,12 +111,11 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
       setImageError(null);
     } else {
       const randomUnitCode = `${Math.floor(100000000000 + Math.random() * 900000000000)}`;
-      const randomBulkCode = `${Math.floor(700000000000 + Math.random() * 900000000000)}`;
       setFormData({
         name: '',
         barcode: randomUnitCode,
         barcodeUnit: randomUnitCode,
-        barcodeBulk: randomBulkCode,
+        barcodeBulk: '',
         unitsPerBulk: 12,
         bulkUnitName: 'Caja x12',
         category: categories.find((c) => c.id !== 'all')?.id || 'pasillo-1',

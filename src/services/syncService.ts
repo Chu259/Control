@@ -400,6 +400,30 @@ export const SyncService = {
     }
   },
 
+  // Admin rejects a user-added product from review (deletes it without incorporating into catalog)
+  async rejectProduct(productId: string): Promise<{ success: boolean; message: string }> {
+    const config = this.getDeviceConfig();
+    const code = config.syncCode.trim().toUpperCase();
+    const baseUrl = this.getServerBaseUrl();
+
+    // Delete locally from pending review and catalog
+    StorageService.rejectPendingProduct(productId);
+
+    try {
+      const response = await fetch(`${baseUrl}/api/sync/store/${encodeURIComponent(code)}/reject-product/${encodeURIComponent(productId)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const parsed = await this.parseSafeResponse(response);
+      return {
+        success: parsed.ok,
+        message: parsed.data?.message || 'Producto rechazado y eliminado.',
+      };
+    } catch {
+      return { success: true, message: 'Producto rechazado y eliminado localmente.' };
+    }
+  },
+
   // Offline QR code generator for direct local network pairing
   async generatePairingQR(storeCode: string, deviceName: string, customHostIp?: string): Promise<string> {
     const config = this.getDeviceConfig();
