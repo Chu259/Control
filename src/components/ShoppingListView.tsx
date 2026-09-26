@@ -19,12 +19,14 @@ import {
 import { Product, StoreSettings, ShoppingListItem } from '../types';
 import { ShoppingService } from '../services/shoppingService';
 import { checkStockAlert } from '../utils/stockAlert';
+import { matchProductTokens } from '../utils/searchMatcher';
 
 interface ShoppingListViewProps {
   products: Product[];
   settings: StoreSettings;
   onNavigateToStock: () => void;
   onScanSearch?: (callback: (val: string) => void) => void;
+  highlightProductId?: string;
 }
 
 export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
@@ -32,6 +34,7 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
   settings,
   onNavigateToStock,
   onScanSearch,
+  highlightProductId,
 }) => {
   const [items, setItems] = useState<ShoppingListItem[]>([]);
   const [isExporting, setIsExporting] = useState(false);
@@ -45,6 +48,32 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
   useEffect(() => {
     reloadList();
   }, []);
+
+  // Scroll to highlighted product when redirected from ProductDetailModal
+  useEffect(() => {
+    if (highlightProductId) {
+      setTimeout(() => {
+        const el = document.getElementById(`shopping-item-${highlightProductId}`);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 150);
+    }
+  }, [highlightProductId]);
+
+  // Close floating Add Product modal on Android back button
+  useEffect(() => {
+    const handleBack = (e: Event) => {
+      if (addProductModalOpen) {
+        e.preventDefault();
+        setAddProductModalOpen(false);
+      }
+    };
+    window.addEventListener('android_back_pressed', handleBack);
+    return () => {
+      window.removeEventListener('android_back_pressed', handleBack);
+    };
+  }, [addProductModalOpen]);
 
   const reloadList = () => {
     const saved = ShoppingService.getShoppingList();
@@ -61,12 +90,7 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
 
   const filteredItems = populatedItems.filter(({ product }) => {
     if (!searchFilter.trim()) return true;
-    const q = searchFilter.toLowerCase();
-    return (
-      product.name.toLowerCase().includes(q) ||
-      (product.barcodeUnit || product.barcode).includes(q) ||
-      (product.barcodeBulk && product.barcodeBulk.includes(q))
-    );
+    return matchProductTokens(product, searchFilter);
   });
 
   // Auto-populate from low stock items (Unit or Bulk alerts)
@@ -289,10 +313,16 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
             const bulkUnitName = product.bulkUnitName || `Caja x${unitsPerBulk}`;
             const alertStatus = checkStockAlert(product);
 
+            const isHighlighted = highlightProductId === product.id;
             return (
               <div
                 key={item.id}
-                className="bg-[#161922] border border-white/10 rounded-2xl p-3 sm:p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-md hover:border-sky-500/30 transition-all"
+                id={`shopping-item-${product.id}`}
+                className={`bg-[#161922] border rounded-2xl p-3 sm:p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-md transition-all ${
+                  isHighlighted
+                    ? 'border-sky-400 ring-2 ring-sky-400/50 bg-sky-950/20 shadow-sky-500/20'
+                    : 'border-white/10 hover:border-sky-500/30'
+                }`}
               >
                 {/* Left: Image / Icon & Product Details */}
                 <div className="flex items-start gap-3 flex-1 min-w-0">
@@ -324,6 +354,11 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
                           {alertStatus.alertLabel}
                         </span>
                       )}
+                      {isHighlighted && (
+                        <span className="px-2 py-0.5 rounded text-[9px] font-extrabold bg-sky-500 text-black animate-pulse">
+                          EDITAR CANTIDAD
+                        </span>
+                      )}
                     </div>
 
                     {/* Dual Barcodes */}
@@ -342,8 +377,8 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
                       </div>
                     </div>
 
-                    {/* Current stock status */}
-                    <div className="flex items-center gap-3 text-xs text-zinc-400 mt-1.5">
+                    {/* Current stock status & Digital Quantity to buy */}
+                    <div className="flex items-center gap-3 text-xs text-zinc-400 mt-1.5 flex-wrap">
                       <span>
                         Stock en tienda: <strong className="text-white">{product.stock} {product.unit || 'uds'}</strong>
                       </span>
@@ -351,6 +386,24 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
                       <span>
                         Bultos: <strong className="text-amber-300">{Math.floor(product.stock / unitsPerBulk)}</strong>
                       </span>
+                    </div>
+
+                    {/* Direct Quantity / Note to Buy */}
+                    <div className="mt-2 flex items-center gap-2">
+                      <label className="text-[11px] font-semibold text-sky-300">
+                        Cantidad a Comprar:
+                      </label>
+                      <input
+                        type="text"
+                        defaultValue={item.targetQuantity || ''}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          ShoppingService.updateShoppingItem(product.id, { targetQuantity: val });
+                        }}
+                        autoFocus={isHighlighted}
+                        placeholder="ej: 10 cj ó 120 uds"
+                        className="bg-[#0e111a] border border-sky-500/50 rounded-lg px-2.5 py-1 text-xs text-white font-mono font-bold focus:outline-none focus:border-sky-400 w-44 shadow-inner"
+                      />
                     </div>
                   </div>
                 </div>
@@ -452,12 +505,7 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
               {products
                 .filter((p) => {
                   if (!catalogSearch.trim()) return true;
-                  const q = catalogSearch.toLowerCase();
-                  return (
-                    p.name.toLowerCase().includes(q) ||
-                    (p.barcodeUnit || p.barcode).includes(q) ||
-                    (p.barcodeBulk && p.barcodeBulk.includes(q))
-                  );
+                  return matchProductTokens(p, catalogSearch);
                 })
                 .map((product) => {
                   const alreadyInList = items.some((item) => item.productId === product.id);

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { X, ArrowDownRight, ArrowUpRight, Check, AlertTriangle, Package, Layers, Tag } from 'lucide-react';
 import { Product, MovementType, MovementReason } from '../types';
 import { Sound } from '../services/sound';
+import { BulkToUnitsModal } from './BulkToUnitsModal';
 
 interface StockMovementModalProps {
   isOpen: boolean;
@@ -39,6 +40,7 @@ export const StockMovementModal: React.FC<StockMovementModalProps> = ({
   const [rawCount, setRawCount] = useState<string>(String(initialQuantity || 1));
   const [reason, setReason] = useState<MovementReason>('compra');
   const [notes, setNotes] = useState('');
+  const [bulkModalOpen, setBulkModalOpen] = useState(false);
 
   useEffect(() => {
     if (product) {
@@ -309,6 +311,16 @@ export const StockMovementModal: React.FC<StockMovementModalProps> = ({
               >
                 +
               </button>
+              {/* Bulto/Caja Assistant button right next to the + / - buttons */}
+              <button
+                type="button"
+                id="qty-open-bulk-modal-btn"
+                onClick={() => setBulkModalOpen(true)}
+                className="w-10 h-10 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 font-bold flex items-center justify-center border border-amber-500/30 active:scale-95 transition-all cursor-pointer flex-shrink-0"
+                title="Asistente de Carga por Bultos (Convertir bultos a unidades)"
+              >
+                <Package className="w-4 h-4" />
+              </button>
             </div>
 
             {/* Quick amount chips */}
@@ -412,6 +424,24 @@ export const StockMovementModal: React.FC<StockMovementModalProps> = ({
           </button>
         </form>
       </div>
+
+      {/* Asistente de Carga por Bultos */}
+      {bulkModalOpen && (
+        <BulkToUnitsModal
+          isOpen={bulkModalOpen}
+          onClose={() => setBulkModalOpen(false)}
+          initialUnitsPerBulk={unitsPerBulk}
+          bulkUnitName={bulkUnitName}
+          productName={product.name}
+          currentUnits={inputCount}
+          onConfirm={(calculatedTotal) => {
+            // When converting bultos to total units, set mode to unit and directly inject calculated units
+            setUnitMode('unit');
+            setInputCount(calculatedTotal);
+            setRawCount(String(calculatedTotal));
+          }}
+        />
+      )}
     </div>
   );
 };

@@ -21,6 +21,7 @@ import { ShoppingService } from '../services/shoppingService';
 import { StorageService } from '../services/storage';
 import { Sound } from '../services/sound';
 import { checkStockAlert } from '../utils/stockAlert';
+import { matchProductTokens } from '../utils/searchMatcher';
 
 interface ReplenishmentViewProps {
   products: Product[];
@@ -41,6 +42,7 @@ interface ReplenishmentViewProps {
   onScanSearch?: (callback: (val: string) => void) => void;
   onUpdateProduct?: (product: Product) => void;
   onRefreshData?: () => void;
+  highlightProductId?: string;
 }
 
 export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
@@ -53,6 +55,7 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
   onScanSearch,
   onUpdateProduct,
   onRefreshData,
+  highlightProductId,
 }) => {
   const [items, setItems] = useState<ReplenishmentItem[]>([]);
   const [activeProducts, setActiveProducts] = useState<Product[]>(() => StorageService.getProducts());
@@ -83,6 +86,18 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
     setActiveProducts(StorageService.getProducts());
   }, [products]);
 
+  // Scroll to highlighted product if redirected from ProductDetailModal
+  useEffect(() => {
+    if (highlightProductId) {
+      setTimeout(() => {
+        const el = document.getElementById(`replenish-card-${highlightProductId}`);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 150);
+    }
+  }, [highlightProductId]);
+
   useEffect(() => {
     const handleRepositionEvent = () => {
       reloadList();
@@ -93,7 +108,21 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
     };
   }, []);
 
-  // Requirement 1 & 3: Add product to replenishment directly persisting isPendingReposition = true in local DB
+  // Close floating Add Product modal on Android back button
+  useEffect(() => {
+    const handleBack = (e: Event) => {
+      if (addModalOpen) {
+        e.preventDefault();
+        setAddModalOpen(false);
+      }
+    };
+    window.addEventListener('android_back_pressed', handleBack);
+    return () => {
+      window.removeEventListener('android_back_pressed', handleBack);
+    };
+  }, [addModalOpen]);
+
+  // Requirement 2: Add product to replenishment directly persisting isPendingReposition = true in local DB
   const handleAddProductToReposition = (product: Product) => {
     const suggested = computeSuggestedGondola(product);
     const updated = StorageService.toggleProductReposition(
@@ -102,6 +131,22 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
       product.notes || 'Reponer en góndola',
       suggested
     );
+    ShoppingService.addToReplenishmentList(
+      product.id,
+      product.notes || 'Reponer en góndola',
+      suggested
+    );
+
+    setActiveProducts((prev) => {
+      const idx = prev.findIndex((p) => p.id === product.id);
+      if (idx >= 0) {
+        const copy = [...prev];
+        copy[idx] = { ...copy[idx], isPendingReposition: true, repositionQuantity: suggested };
+        return copy;
+      }
+      return [{ ...product, isPendingReposition: true, repositionQuantity: suggested }, ...prev];
+    });
+
     if (updated) {
       if (onUpdateProduct) onUpdateProduct(updated);
       if (onRefreshData) onRefreshData();
@@ -112,9 +157,71 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
     setTimeout(() => setToastMessage(null), 3000);
   };
 
+  // Requirement 2: Direct barcode scanner integration for Reposition tab
+  const handleScanForReplenish = () => {
+    if (!onScanSearch) return;
+    onScanSearch((scannedValue) => {
+      const trimmed = (scannedValue || '').trim();
+      if (!trimmed) return;
+
+      const allCurrent = StorageService.getProducts();
+      const matched =
+        StorageService.getProductByBarcode(trimmed) ||
+        allCurrent.find(
+          (p) =>
+            (p.barcodeUnit && p.barcodeUnit.trim() === trimmed) ||
+            (p.barcode && p.barcode.trim() === trimmed) ||
+            (p.barcodeBulk && p.barcodeBulk.trim() === trimmed)
+        );
+
+      if (matched) {
+        // Automatically add to replenishment list!
+        handleAddProductToReposition(matched);
+        // Clear search filter so the newly added product is never filtered out by its barcode!
+        setSearchFilter('');
+        setStatusFilter('all');
+      } else {
+        Sound.playWarningBeep();
+        setToastMessage(`Código [${trimmed}] no coincide con ningún producto.`);
+        setSearchFilter(trimmed);
+        setTimeout(() => setToastMessage(null), 4000);
+      }
+    });
+  };
+
+  // Barcode scanner inside the + Añadir Producto modal
+  const handleScanInAddModal = () => {
+    if (!onScanSearch) return;
+    onScanSearch((scannedValue) => {
+      const trimmed = (scannedValue || '').trim();
+      if (!trimmed) return;
+
+      const allCurrent = StorageService.getProducts();
+      const matched =
+        StorageService.getProductByBarcode(trimmed) ||
+        allCurrent.find(
+          (p) =>
+            (p.barcodeUnit && p.barcodeUnit.trim() === trimmed) ||
+            (p.barcode && p.barcode.trim() === trimmed) ||
+            (p.barcodeBulk && p.barcodeBulk.trim() === trimmed)
+        );
+
+      if (matched) {
+        handleAddProductToReposition(matched);
+        setCatalogSearch('');
+      } else {
+        setCatalogSearch(trimmed);
+      }
+    });
+  };
+
   // Requirement 1 & 3: Remove product from replenishment persisting isPendingReposition = false
   const handleRemoveProductFromReposition = (productId: string) => {
     const updated = StorageService.toggleProductReposition(productId, false);
+    ShoppingService.removeFromReplenishmentList(productId);
+    setActiveProducts((prev) =>
+      prev.map((p) => (p.id === productId ? { ...p, isPendingReposition: false } : p))
+    );
     if (updated) {
       if (onUpdateProduct) onUpdateProduct(updated);
       if (onRefreshData) onRefreshData();
@@ -345,13 +452,7 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
     if (statusFilter === 'pending' && !isPending) return false;
     if (statusFilter === 'completed' && isPending) return false;
     if (!searchFilter.trim()) return true;
-    const q = searchFilter.toLowerCase().trim();
-    return (
-      product.name.toLowerCase().includes(q) ||
-      (product.barcodeUnit || product.barcode || '').toLowerCase().includes(q) ||
-      (product.barcodeBulk && product.barcodeBulk.toLowerCase().includes(q)) ||
-      (item.locationNotes && item.locationNotes.toLowerCase().includes(q))
-    );
+    return matchProductTokens(product, searchFilter);
   });
 
   // Auto-populate from low stock items
@@ -523,9 +624,9 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
               <button
                 type="button"
                 id="btn-scan-replenish-search"
-                onClick={() => onScanSearch((val) => setSearchFilter(val))}
+                onClick={handleScanForReplenish}
                 className="p-1 rounded text-amber-400 hover:text-amber-300 hover:bg-white/10 transition-colors"
-                title="Escanear código de barra para buscar"
+                title="Escanear código de barra para añadir o localizar producto en reposición"
               >
                 <Barcode className="w-4 h-4" />
               </button>
@@ -587,12 +688,16 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
               ? `${currentAddQty} ${currentAddQty === 1 ? (product.bulkUnitName || 'Bulto') : (product.bulkUnitName || 'Bultos')} = ${effectiveUnits} uds`
               : `${currentAddQty} ${product.unit || 'uds'}`;
 
+            const isHighlighted = highlightProductId === product.id;
+
             return (
               <div
                 key={item.id}
                 id={`replenish-card-${product.id}`}
                 className={`bg-[#161922] border rounded-2xl p-3 sm:p-4 transition-all shadow-lg ${
-                  isCompleted
+                  isHighlighted
+                    ? 'border-emerald-400 ring-2 ring-emerald-400/70 bg-[#102419]/90 shadow-emerald-500/30'
+                    : isCompleted
                     ? 'border-emerald-500/40 bg-[#121815]/90'
                     : 'border-white/10 hover:border-emerald-500/30'
                 }`}
@@ -882,9 +987,9 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
                     <button
                       type="button"
                       id="btn-scan-catalog-replenish"
-                      onClick={() => onScanSearch((val) => setCatalogSearch(val))}
+                      onClick={handleScanInAddModal}
                       className="p-1 rounded text-amber-400 hover:text-amber-300 hover:bg-white/10 transition-colors"
-                      title="Escanear código de barra para buscar producto"
+                      title="Escanear código de barra para añadir producto directamente"
                     >
                       <Barcode className="w-4 h-4" />
                     </button>
@@ -897,12 +1002,7 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
               {activeProducts
                 .filter((p) => {
                   if (!catalogSearch.trim()) return true;
-                  const q = catalogSearch.toLowerCase().trim();
-                  return (
-                    p.name.toLowerCase().includes(q) ||
-                    (p.barcodeUnit || p.barcode || '').toLowerCase().includes(q) ||
-                    (p.barcodeBulk && p.barcodeBulk.toLowerCase().includes(q))
-                  );
+                  return matchProductTokens(p, catalogSearch);
                 })
                 .map((product) => {
                   const alreadyInList = Boolean(

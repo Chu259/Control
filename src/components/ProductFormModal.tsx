@@ -16,10 +16,14 @@ import {
   Store,
   Plus,
   Tag,
+  AlertOctagon,
 } from 'lucide-react';
 import { Product, Category } from '../types';
 import { compressImageToIcon } from '../utils/imageCompressor';
 import { CategoryManagerModal } from './CategoryManagerModal';
+import { StorageService } from '../services/storage';
+import { Sound } from '../services/sound';
+import { BulkToUnitsModal } from './BulkToUnitsModal';
 
 interface ProductFormModalProps {
   isOpen: boolean;
@@ -57,6 +61,13 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
   const [imageStats, setImageStats] = useState<{ origKB?: number; iconKB?: number } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
+  const [bulkModalOpen, setBulkModalOpen] = useState(false);
+  const [duplicateWarning, setDuplicateWarning] = useState<{
+    field: 'name' | 'barcodeUnit' | 'barcodeBulk';
+    message: string;
+    existingProductName: string;
+    existingBarcode?: string;
+  } | null>(null);
 
   const [formData, setFormData] = useState<Partial<Product>>({
     name: '',
@@ -206,10 +217,79 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const barcodeUnit = (formData.barcodeUnit || formData.barcode || '').trim();
-    if (!formData.name?.trim() || !barcodeUnit) {
-      alert('Por favor completa el nombre del producto y el código de barra por unidad');
+    const barcodeBulk = (formData.barcodeBulk || '').trim();
+    const productName = (formData.name || '').trim();
+
+    if (!productName || !barcodeUnit) {
+      Sound.playWarningBeep();
+      setDuplicateWarning({
+        field: 'name',
+        message: 'Por favor completa el nombre del producto y el código de barra por unidad.',
+        existingProductName: '',
+      });
       return;
     }
+
+    // REQUIREMENT 3: Duplicate product validation and blocking
+    const allProducts = StorageService.getProducts();
+    const currentId = product?.id || formData.id;
+
+    // 1. Check duplicate unit barcode
+    const dupUnit = allProducts.find(
+      (p) =>
+        p.id !== currentId &&
+        ((p.barcodeUnit && p.barcodeUnit.trim() === barcodeUnit) ||
+          (p.barcode && p.barcode.trim() === barcodeUnit) ||
+          (p.barcodeBulk && p.barcodeBulk.trim() === barcodeUnit))
+    );
+    if (dupUnit) {
+      Sound.playWarningBeep();
+      setDuplicateWarning({
+        field: 'barcodeUnit',
+        message: `El código de barras por unidad [${barcodeUnit}] ya pertenece al producto "${dupUnit.name}". No se permiten códigos duplicados.`,
+        existingProductName: dupUnit.name,
+        existingBarcode: barcodeUnit,
+      });
+      return;
+    }
+
+    // 2. Check duplicate bulk barcode (if provided)
+    if (barcodeBulk) {
+      const dupBulk = allProducts.find(
+        (p) =>
+          p.id !== currentId &&
+          ((p.barcodeBulk && p.barcodeBulk.trim() === barcodeBulk) ||
+            (p.barcodeUnit && p.barcodeUnit.trim() === barcodeBulk) ||
+            (p.barcode && p.barcode.trim() === barcodeBulk))
+      );
+      if (dupBulk) {
+        Sound.playWarningBeep();
+        setDuplicateWarning({
+          field: 'barcodeBulk',
+          message: `El código de barras de bulto [${barcodeBulk}] ya pertenece al producto "${dupBulk.name}".`,
+          existingProductName: dupBulk.name,
+          existingBarcode: barcodeBulk,
+        });
+        return;
+      }
+    }
+
+    // 3. Check duplicate exact product name
+    const cleanLowerName = productName.toLowerCase();
+    const dupName = allProducts.find(
+      (p) => p.id !== currentId && p.name.trim().toLowerCase() === cleanLowerName
+    );
+    if (dupName) {
+      Sound.playWarningBeep();
+      setDuplicateWarning({
+        field: 'name',
+        message: `Ya existe un producto con el nombre exacto "${dupName.name}" en el inventario.`,
+        existingProductName: dupName.name,
+      });
+      return;
+    }
+
+    setDuplicateWarning(null);
 
     const minUnit =
       formData.minStockAlertUnit !== undefined && Number(formData.minStockAlertUnit) >= 0
@@ -224,10 +304,10 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
       id: formData.id || `prod-${Date.now()}`,
       barcode: barcodeUnit,
       barcodeUnit: barcodeUnit,
-      barcodeBulk: formData.barcodeBulk?.trim() || undefined,
+      barcodeBulk: barcodeBulk || undefined,
       unitsPerBulk: Number(formData.unitsPerBulk) >= 0 ? Number(formData.unitsPerBulk) : 12,
       bulkUnitName: formData.bulkUnitName?.trim() || `Caja x${formData.unitsPerBulk ?? 12}`,
-      name: formData.name.trim(),
+      name: productName,
       category: formData.category || 'abarrotes',
       costPrice: 0,
       sellingPrice: 0,
@@ -297,6 +377,39 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
 
         {/* Scrollable Form Body */}
         <form onSubmit={handleSubmit} className="p-4 space-y-4 overflow-y-auto flex-1">
+          {/* REQUIREMENT 3: Duplicate Warning & Blocking Banner */}
+          {duplicateWarning && (
+            <div
+              id="duplicate-product-alert"
+              className="p-3 rounded-xl bg-rose-500/15 border-2 border-rose-500/60 text-white animate-fade-in flex items-start justify-between gap-3 shadow-lg"
+            >
+              <div className="flex items-start gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-rose-500/30 text-rose-300 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <AlertOctagon className="w-5 h-5 text-rose-400" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-rose-300 flex items-center gap-1.5">
+                    <span>¡Producto Duplicado - Registro Bloqueado!</span>
+                  </h4>
+                  <p className="text-[11px] text-zinc-200 mt-0.5 leading-snug">
+                    {duplicateWarning.message}
+                  </p>
+                  <p className="text-[10px] text-rose-400/90 mt-1 font-semibold">
+                    Modifica el código o nombre para evitar duplicar existencias en el depósito.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDuplicateWarning(null)}
+                className="p-1 rounded-lg text-rose-400 hover:text-white hover:bg-rose-500/20 transition-colors"
+                title="Cerrar aviso"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
           {/* Product Name */}
           <div>
             <label className="block text-xs font-medium text-zinc-300 mb-1">
@@ -307,9 +420,14 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
               type="text"
               required
               value={formData.name || ''}
-              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-              placeholder="Ej: Aceite de Girasol 1.5L"
-              className="w-full bg-[#0e1017] border border-white/10 rounded-xl px-3 py-2 text-xs text-white placeholder:text-zinc-600 focus:outline-none focus:border-teal-400"
+              onChange={(e) => {
+                setFormData({ ...formData, name: e.target.value });
+                if (duplicateWarning?.field === 'name') setDuplicateWarning(null);
+              }}
+              placeholder="ej: Arroz Lucchetti 1kg"
+              className={`w-full bg-[#0d1017] border ${
+                duplicateWarning?.field === 'name' ? 'border-rose-500 ring-1 ring-rose-500' : 'border-white/10'
+              } rounded-xl px-3 py-2 text-xs font-semibold text-white placeholder:text-zinc-500 focus:outline-none focus:border-teal-400`}
             />
           </div>
 
@@ -398,15 +516,18 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
                 type="text"
                 required
                 value={formData.barcodeUnit || ''}
-                onChange={(e) =>
+                onChange={(e) => {
                   setFormData({
                     ...formData,
                     barcodeUnit: e.target.value,
                     barcode: e.target.value,
-                  })
-                }
+                  });
+                  if (duplicateWarning?.field === 'barcodeUnit') setDuplicateWarning(null);
+                }}
                 placeholder="Escanea el código de la unidad suelta"
-                className="w-full bg-[#161922] border border-white/10 rounded-xl px-3 py-2 text-xs font-mono text-teal-300 focus:outline-none focus:border-teal-400"
+                className={`w-full bg-[#161922] border ${
+                  duplicateWarning?.field === 'barcodeUnit' ? 'border-rose-500 ring-1 ring-rose-500' : 'border-white/10'
+                } rounded-xl px-3 py-2 text-xs font-mono text-teal-300 focus:outline-none focus:border-teal-400`}
               />
             </div>
 
@@ -437,9 +558,14 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
                 id="barcode-bulk-input"
                 type="text"
                 value={formData.barcodeBulk || ''}
-                onChange={(e) => setFormData({ ...formData, barcodeBulk: e.target.value })}
+                onChange={(e) => {
+                  setFormData({ ...formData, barcodeBulk: e.target.value });
+                  if (duplicateWarning?.field === 'barcodeBulk') setDuplicateWarning(null);
+                }}
                 placeholder="Escanea el código impreso en la caja o fardo"
-                className="w-full bg-[#161922] border border-white/10 rounded-xl px-3 py-2 text-xs font-mono text-amber-300 focus:outline-none focus:border-amber-400"
+                className={`w-full bg-[#161922] border ${
+                  duplicateWarning?.field === 'barcodeBulk' ? 'border-rose-500 ring-1 ring-rose-500' : 'border-white/10'
+                } rounded-xl px-3 py-2 text-xs font-mono text-amber-300 focus:outline-none focus:border-amber-400`}
               />
             </div>
 
@@ -488,19 +614,32 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
               <span className="text-[10px] text-zinc-400">Por Unidad y Bulto</span>
             </div>
 
-            {/* Current Stock */}
+            {/* Current Stock with Bulk Assistant */}
             <div>
-              <label className="block text-xs font-medium text-zinc-300 mb-1">
-                Stock Total Físico (en Unidades)
-              </label>
-              <input
-                id="product-stock-input"
-                type="number"
-                min="0"
-                value={formData.stock ?? 0}
-                onChange={(e) => setFormData({ ...formData, stock: parseInt(e.target.value) || 0 })}
-                className="w-full bg-[#161922] border border-white/10 rounded-xl px-3 py-2 text-xs font-bold text-white focus:outline-none focus:border-emerald-400"
-              />
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs font-medium text-zinc-300">
+                  Stock Total Físico (en Unidades)
+                </label>
+              </div>
+              <div className="relative">
+                <input
+                  id="product-stock-input"
+                  type="number"
+                  min="0"
+                  value={formData.stock ?? 0}
+                  onChange={(e) => setFormData({ ...formData, stock: parseInt(e.target.value) || 0 })}
+                  className="w-full bg-[#161922] border border-white/10 rounded-xl pl-3 pr-10 py-2 text-xs font-bold text-white focus:outline-none focus:border-emerald-400"
+                />
+                <button
+                  type="button"
+                  id="btn-stock-bulk-modal"
+                  onClick={() => setBulkModalOpen(true)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-amber-400 hover:text-amber-300 hover:bg-white/10 rounded-lg transition-colors cursor-pointer"
+                  title="Asistente de Carga por Bultos (Convertir bultos a unidades)"
+                >
+                  <Package className="w-4 h-4" />
+                </button>
+              </div>
               <span className="text-[10px] text-zinc-400 mt-1 block">
                 ≈ {(formData.stock || 0) / unitsPerBulk >= 1
                   ? `${Math.floor((formData.stock || 0) / unitsPerBulk)} bultos completos + ${(formData.stock || 0) % unitsPerBulk} uds sueltas`
@@ -775,6 +914,21 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
           onSelectCategory={(catId) => {
             setFormData((prev) => ({ ...prev, category: catId }));
             setCategoryManagerOpen(false);
+          }}
+        />
+      )}
+
+      {/* Asistente de Carga por Bultos */}
+      {bulkModalOpen && (
+        <BulkToUnitsModal
+          isOpen={bulkModalOpen}
+          onClose={() => setBulkModalOpen(false)}
+          initialUnitsPerBulk={unitsPerBulk}
+          bulkUnitName={formData.bulkUnitName}
+          productName={formData.name || 'Nuevo Producto'}
+          currentUnits={formData.stock || 0}
+          onConfirm={(calculatedUnits) => {
+            setFormData((prev) => ({ ...prev, stock: calculatedUnits }));
           }}
         />
       )}

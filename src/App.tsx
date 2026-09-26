@@ -33,8 +33,10 @@ import { WelcomeLoginScreen } from './components/WelcomeLoginScreen';
 import { CategoryManagerModal } from './components/CategoryManagerModal';
 import { NavigationMenu } from './components/NavigationMenu';
 import { AlertTriangle, PackageX, Plus, RefreshCw, Smartphone, Sparkles } from 'lucide-react';
+import { App as CapApp } from '@capacitor/app';
 import { Sound } from './services/sound';
 import { checkStockAlert } from './utils/stockAlert';
+import { matchProductTokens } from './utils/searchMatcher';
 import { NotificationService } from './services/pushNotifications';
 import { InAppPushBanner } from './components/InAppPushBanner';
 import { NetworkPermissionService } from './services/networkPermissions';
@@ -50,6 +52,7 @@ export default function App() {
   const [viewMode, setViewMode] = useState<ViewMode>('grid-small');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [highlightProductId, setHighlightProductId] = useState<string | undefined>(undefined);
 
   // User Management, Authentication & Security
   const [currentUser, setCurrentUser] = useState<AppUser>(() => AuthService.getCurrentUser());
@@ -174,21 +177,113 @@ export default function App() {
     }
   };
 
-  // Filtered products list for inventory view
+  // REQUIREMENT 4: Direct flow redirection from ProductDetailModal to Shopping or Replenishment tab
+  const handleNavigateToTabFromDetail = (tab: 'shopping' | 'replenishment', productId?: string) => {
+    setDetailModalOpen(false);
+    setDetailProduct(null);
+    setCurrentTab(tab);
+    setHighlightProductId(productId);
+    if (productId) {
+      setTimeout(() => setHighlightProductId(undefined), 6000);
+    }
+  };
+
+  // REQUIREMENT 6: Native Android Back Button Listener via Capacitor App Plugin
+  useEffect(() => {
+    let sub: any;
+    try {
+      CapApp.addListener('backButton', ({ canGoBack }) => {
+        // Priority 1: Barcode scanner modal
+        if (scannerOpen) {
+          setScannerOpen(false);
+          setScanTarget(null);
+          setSearchScannerCallback(null);
+          return;
+        }
+
+        // Priority 2: Product Detail Modal
+        if (detailModalOpen) {
+          setDetailModalOpen(false);
+          setDetailProduct(null);
+          return;
+        }
+
+        // Priority 3: Product Form Modal
+        if (productFormOpen) {
+          setProductFormOpen(false);
+          setEditingProduct(null);
+          setScannedCodeForForm(null);
+          return;
+        }
+
+        // Priority 4: Stock Movement Modal
+        if (movementModalOpen) {
+          setMovementModalOpen(false);
+          setMovementProduct(null);
+          return;
+        }
+
+        // Priority 5: Category Manager Modal
+        if (categoryManagerOpen) {
+          setCategoryManagerOpen(false);
+          return;
+        }
+
+        // Priority 6: User Login Modal
+        if (userLoginModalOpen) {
+          setUserLoginModalOpen(false);
+          return;
+        }
+
+        // Priority 7: Check if child floating modal handled back button
+        const event = new CustomEvent('android_back_pressed', { cancelable: true });
+        const handledByChild = !window.dispatchEvent(event);
+        if (handledByChild) {
+          return;
+        }
+
+        // Priority 8: Return to main inventory tab instead of closing app
+        if (currentTab !== 'inventory') {
+          setCurrentTab('inventory');
+          return;
+        }
+
+        if (canGoBack) {
+          window.history.back();
+        } else {
+          CapApp.exitApp();
+        }
+      }).then((handle) => {
+        sub = handle;
+      });
+    } catch (e) {
+      console.warn('Capacitor App backButton listener notice:', e);
+    }
+
+    return () => {
+      if (sub && sub.remove) {
+        sub.remove();
+      }
+    };
+  }, [
+    scannerOpen,
+    detailModalOpen,
+    productFormOpen,
+    movementModalOpen,
+    categoryManagerOpen,
+    userLoginModalOpen,
+    currentTab,
+  ]);
+
+  // REQUIREMENT 1: Tokenized flexible search insensitive to word order ("Perita Molto" <-> "Molto Perita")
   const filteredProducts = products.filter((p) => {
     // Category filter
     if (selectedCategory !== 'all' && p.category !== selectedCategory) {
       return false;
     }
-    // Search query
+    // Search query with word-order independent tokens
     if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase().trim();
-      const matchName = p.name.toLowerCase().includes(q);
-      const matchBarcode = (p.barcode || '').toLowerCase().includes(q);
-      const matchBarcodeUnit = (p.barcodeUnit || '').toLowerCase().includes(q);
-      const matchBarcodeBulk = (p.barcodeBulk || '').toLowerCase().includes(q);
-      const matchCategory = p.category.toLowerCase().includes(q);
-      return matchName || matchBarcode || matchBarcodeUnit || matchBarcodeBulk || matchCategory;
+      return matchProductTokens(p, searchQuery);
     }
     return true;
   });
@@ -546,6 +641,7 @@ export default function App() {
               settings={settings}
               onNavigateToStock={() => setCurrentTab('inventory')}
               onScanSearch={handleOpenSearchScannerFor}
+              highlightProductId={highlightProductId}
             />
           )}
 
@@ -559,6 +655,7 @@ export default function App() {
               onScanSearch={handleOpenSearchScannerFor}
               onUpdateProduct={handleUpdateProduct}
               onRefreshData={reloadAllData}
+              highlightProductId={highlightProductId}
             />
           )}
 
@@ -702,6 +799,7 @@ export default function App() {
             setProductFormOpen(true);
           }}
           onUpdateProduct={handleUpdateProduct}
+          onNavigateToTab={handleNavigateToTabFromDetail}
         />
 
         {/* User Login & Authentication Modal */}

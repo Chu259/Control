@@ -32,6 +32,7 @@ interface ProductDetailModalProps {
   onOpenMovement: (product: Product, type: MovementType, unitType?: 'unit' | 'bulk') => void;
   onEdit: (product: Product) => void;
   onUpdateProduct?: (product: Product) => void;
+  onNavigateToTab?: (tab: 'shopping' | 'replenishment', highlightProductId?: string) => void;
 }
 
 export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
@@ -42,6 +43,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   onOpenMovement,
   onEdit,
   onUpdateProduct,
+  onNavigateToTab,
 }) => {
   const [copiedField, setCopiedField] = useState<'unit' | 'bulk' | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
@@ -71,17 +73,21 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
     setTimeout(() => setCopiedField(null), 2000);
   };
 
+  // REQUIREMENT 4: Direct flow redirection to Shopping tab with open edit field
   const handleAddToShopping = () => {
     ShoppingService.addToShoppingList(displayProd.id, 'Agregado desde detalle');
-    setActionNotice('¡Añadido a Lista de Compras!');
-    setTimeout(() => setActionNotice(null), 2500);
+    Sound.playSuccessChime();
+    onClose();
+    if (onNavigateToTab) {
+      onNavigateToTab('shopping', displayProd.id);
+    }
   };
 
+  // REQUIREMENT 4: Direct flow redirection to Replenishment tab with open edit field
   const handleAddToReplenishment = () => {
-    const isNowPending = !displayProd.isPendingReposition;
     const updated = StorageService.toggleProductReposition(
       displayProd.id,
-      isNowPending,
+      true,
       displayProd.notes || 'Reponer en góndola'
     );
     if (updated) {
@@ -90,9 +96,11 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
         onUpdateProduct(updated);
       }
     }
-    setActionNotice(isNowPending ? '¡Añadido a Lista de Reposición!' : 'Quitado de Lista de Reposición');
     Sound.playSuccessChime();
-    setTimeout(() => setActionNotice(null), 2500);
+    onClose();
+    if (onNavigateToTab) {
+      onNavigateToTab('replenishment', displayProd.id);
+    }
   };
 
   return (

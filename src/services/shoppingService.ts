@@ -40,6 +40,17 @@ export const ShoppingService = {
     return list;
   },
 
+  updateShoppingItem(productId: string, updates: Partial<ShoppingListItem>): ShoppingListItem[] {
+    const list = this.getShoppingList().map((item) => {
+      if (item.productId === productId) {
+        return { ...item, ...updates };
+      }
+      return item;
+    });
+    this.saveShoppingList(list);
+    return list;
+  },
+
   clearShoppingList(): void {
     localStorage.removeItem(SHOPPING_STORAGE_KEY);
   },
