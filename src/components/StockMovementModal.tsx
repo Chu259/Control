@@ -433,7 +433,6 @@ export const StockMovementModal: React.FC<StockMovementModalProps> = ({
           initialUnitsPerBulk={unitsPerBulk}
           bulkUnitName={bulkUnitName}
           productName={product.name}
-          currentUnits={inputCount}
           onConfirm={(calculatedTotal) => {
             // When converting bultos to total units, set mode to unit and directly inject calculated units
             setUnitMode('unit');

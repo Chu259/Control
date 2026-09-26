@@ -926,7 +926,6 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
           initialUnitsPerBulk={unitsPerBulk}
           bulkUnitName={formData.bulkUnitName}
           productName={formData.name || 'Nuevo Producto'}
-          currentUnits={formData.stock || 0}
           onConfirm={(calculatedUnits) => {
             setFormData((prev) => ({ ...prev, stock: calculatedUnits }));
           }}
