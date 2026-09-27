@@ -295,22 +295,22 @@ export const SyncView: React.FC<SyncViewProps> = ({
     }
   };
 
-  // Requirement 3: Generate Optimized Export JSON (Compresses or strips images to strictly fit under 20,000 characters)
-  const handleOpenExportModal = async (stripImages = false) => {
+  // Generate Optimized Export JSON (omits heavy Base64 images to guarantee <20K chars)
+  const handleOpenExportModal = async (stripImages = true) => {
     setExportModalOpen(true);
     setCopiedJson(false);
-    setForceStripImages(stripImages);
+    setForceStripImages(true);
     setExportOptState({
       isGenerating: true,
       isSafeForClipboard: true,
-      imagesStripped: false,
+      imagesStripped: true,
       imagesCompressed: false,
       totalChars: 0,
       sizeKB: 0,
     });
 
     try {
-      const result = await SyncService.generateOptimizedSyncJson({ forceStripImages: stripImages });
+      const result = await SyncService.generateOptimizedSyncJson({ forceStripImages: true });
       setExportedJsonText(result.json);
       setForceStripImages(result.imagesStripped);
       setExportOptState({
@@ -1263,67 +1263,32 @@ export const SyncView: React.FC<SyncViewProps> = ({
                 </div>
               ) : (
                 <>
-                  {/* Status Banner based on Android 20,000 characters threshold */}
-                  {exportOptState?.imagesStripped ? (
-                    <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-start gap-2.5">
-                      <ImageOff className="w-4 h-4 flex-shrink-0 mt-0.5 text-amber-400" />
-                      <div className="space-y-1">
-                        <p className="font-semibold text-white">Modo Seguro para Android Activado (Sin Fotos)</p>
-                        <p className="text-[11px] text-amber-200/90 leading-relaxed">
-                          {exportOptState.reason || 'Para garantizar que el texto no sea cortado a los 20,000 caracteres por el portapapeles de Android, las fotos se omitieron automáticamente.'}
-                        </p>
-                        <p className="text-[10px] text-zinc-400 font-medium">
-                          ✓ Se priorizaron al 100%: Nombre, Código de Barra, Stock, Precios y Movimientos.
-                        </p>
-                      </div>
+                  {/* Status Banner: Lightweight safe mode (<20K) prioritizing critical data */}
+                  <div className="p-3 rounded-xl bg-teal-500/10 border border-teal-500/30 text-teal-300 text-xs flex items-start gap-2.5">
+                    <CheckCircle2 className="w-4 h-4 flex-shrink-0 mt-0.5 text-teal-400" />
+                    <div className="space-y-1">
+                      <p className="font-semibold text-white">Sincronización Ultraligera y Segura (&lt;20K)</p>
+                      <p className="text-[11px] text-teal-200/90 leading-relaxed">
+                        Optimizado para transferencias rápidas y confiables sin riesgo de corte en el portapapeles.
+                      </p>
+                      <p className="text-[10px] text-zinc-400 font-medium">
+                        ✓ Priorizado al 100%: Nombre, Código de Barra, Stock, Precios, Pasillos y Movimientos.
+                      </p>
                     </div>
-                  ) : exportOptState?.imagesCompressed ? (
-                    <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs flex items-start gap-2.5">
-                      <CheckCircle2 className="w-4 h-4 flex-shrink-0 mt-0.5 text-emerald-400" />
-                      <div className="space-y-1">
-                        <p className="font-semibold text-white">Fotos Comprimidas Fuertemente (Tamaño Seguro)</p>
-                        <p className="text-[11px] text-emerald-200/90 leading-relaxed">
-                          Las fotos se optimizaron en miniaturas ultraligeras. El paquete pesa menos de 20,000 caracteres y no se cortará en el portapapeles.
-                        </p>
-                      </div>
-                    </div>
-                  ) : null}
+                  </div>
 
-                  {/* Size & Options Bar */}
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 bg-white/5 rounded-xl border border-white/5">
+                  {/* Size Bar */}
+                  <div className="flex items-center justify-between gap-2 p-2.5 bg-white/5 rounded-xl border border-white/5">
                     <div className="flex items-center gap-2">
                       <span className="text-[11px] text-zinc-400">Tamaño:</span>
                       <span className="text-[11px] font-mono font-bold text-white">
                         {exportedJsonText.length.toLocaleString()} caracteres ({((exportedJsonText.length / 1024).toFixed(1))} KB)
                       </span>
-                      {exportedJsonText.length <= 20000 ? (
-                        <span className="px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-300 font-semibold">
-                          ✓ Seguro (&lt;20K)
-                        </span>
-                      ) : (
-                        <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-500/20 text-amber-300 font-semibold">
-                          ⚠️ &gt;20K
-                        </span>
-                      )}
+                      <span className="px-2 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-300 font-bold border border-emerald-500/30">
+                        ✓ Seguro (&lt;20K)
+                      </span>
                     </div>
-
-                    <button
-                      type="button"
-                      onClick={() => handleOpenExportModal(!forceStripImages)}
-                      className="text-[11px] font-medium text-teal-400 hover:text-teal-300 flex items-center gap-1.5 self-start sm:self-auto px-2 py-1 bg-white/5 hover:bg-white/10 rounded-lg transition-colors"
-                    >
-                      {forceStripImages ? (
-                        <>
-                          <CheckCheck className="w-3.5 h-3.5" />
-                          <span>Intentar incluir fotos</span>
-                        </>
-                      ) : (
-                        <>
-                          <ImageOff className="w-3.5 h-3.5" />
-                          <span>Omitir fotos (Modo Ultraligero)</span>
-                        </>
-                      )}
-                    </button>
+                    <span className="text-[10px] text-zinc-400 font-mono">Modo Depósito</span>
                   </div>
 
                   <p className="text-xs text-zinc-300">

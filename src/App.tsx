@@ -17,7 +17,7 @@ import { ViewToggleHeader } from './components/ViewToggleHeader';
 import { CategoryChips } from './components/CategoryChips';
 import { ProductCard } from './components/ProductCard';
 import { BarcodeScannerModal } from './components/BarcodeScannerModal';
-import { StockMovementModal } from './components/StockMovementModal';
+import { BulkToUnitsModal } from './components/BulkToUnitsModal';
 import { ProductFormModal } from './components/ProductFormModal';
 import { ProductDetailModal } from './components/ProductDetailModal';
 import { AlertsView } from './components/AlertsView';
@@ -745,17 +745,33 @@ export default function App() {
           }}
         />
 
-        {/* Stock Movement Modal (Entradas y Salidas con soporte Unidad / Bulto) */}
-        <StockMovementModal
-          isOpen={movementModalOpen}
-          onClose={() => setMovementModalOpen(false)}
-          product={movementProduct}
-          initialType={movementType}
-          initialUnitType={movementUnitType}
-          initialQuantity={movementInitialQuantity}
-          currency={settings.currencySymbol || '$'}
-          onSubmit={handleRecordMovement}
-        />
+        {/* Asistente de Carga por Bultos unificado para Entrada y Salida */}
+        {movementProduct && (
+          <BulkToUnitsModal
+            isOpen={movementModalOpen}
+            onClose={() => {
+              setMovementModalOpen(false);
+              setMovementProduct(null);
+            }}
+            movementType={movementType}
+            productName={movementProduct.name}
+            initialUnitsPerBulk={movementProduct.unitsPerBulk || 12}
+            bulkUnitName={movementProduct.bulkUnitName || 'Bulto'}
+            currentStock={movementProduct.stock}
+            onConfirmMovement={(units, type) => {
+              handleRecordMovement({
+                productId: movementProduct.id,
+                type: type,
+                quantity: units,
+                reason: type === 'in' ? 'compra' : 'venta',
+                unitType: 'bulk',
+                unitsPerBulk: movementProduct.unitsPerBulk || 12,
+              });
+              setMovementModalOpen(false);
+              setMovementProduct(null);
+            }}
+          />
+        )}
 
         {/* Product Add/Edit Modal (con Códigos de Barra Unidad + Bulto) */}
         <ProductFormModal

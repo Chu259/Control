@@ -1,14 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Check } from 'lucide-react';
+import { X, Check, ArrowDownLeft, ArrowUpRight, AlertTriangle } from 'lucide-react';
 import { Sound } from '../services/sound';
 
-interface BulkToUnitsModalProps {
+export interface BulkToUnitsModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onConfirm: (totalUnits: number) => void;
+  onConfirm?: (totalUnits: number) => void;
+  onConfirmMovement?: (totalUnits: number, type: 'in' | 'out') => void;
+  movementType?: 'in' | 'out'; // When provided, works in Entrada or Salida mode
   initialUnitsPerBulk?: number;
   bulkUnitName?: string;
   productName?: string;
+  currentStock?: number;
 }
 
 /**
@@ -217,9 +220,12 @@ export const BulkToUnitsModal: React.FC<BulkToUnitsModalProps> = ({
   isOpen,
   onClose,
   onConfirm,
+  onConfirmMovement,
+  movementType,
   initialUnitsPerBulk = 12,
   bulkUnitName = 'Bulto',
   productName,
+  currentStock,
 }) => {
   // Memory cleanup on open: Bultos and loose units reset to empty every time
   const [bultos, setBultos] = useState<string>('');
@@ -279,8 +285,17 @@ export const BulkToUnitsModal: React.FC<BulkToUnitsModalProps> = ({
 
   const handleConfirm = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    if (calculatedTotal <= 0) {
+      Sound.playWarningBeep();
+      return;
+    }
     Sound.playSuccessChime();
-    onConfirm(calculatedTotal);
+
+    if (movementType && onConfirmMovement) {
+      onConfirmMovement(calculatedTotal, movementType);
+    } else if (onConfirm) {
+      onConfirm(calculatedTotal);
+    }
     onClose();
   };
 
@@ -291,25 +306,72 @@ export const BulkToUnitsModal: React.FC<BulkToUnitsModalProps> = ({
     }
   };
 
+  // Determine modal theme & labels based on movementType ('in' | 'out' | undefined)
+  const isEntry = movementType === 'in';
+  const isExit = movementType === 'out';
+  const isMovement = isEntry || isExit;
+
+  const titleText = isEntry
+    ? 'Asistente de Entrada por Bultos'
+    : isExit
+    ? 'Asistente de Salida por Bultos'
+    : 'Asistente de Carga por Bultos';
+
+  const badgeColor = isEntry
+    ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+    : isExit
+    ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+    : 'bg-amber-500/20 text-amber-300 border-amber-500/30';
+
+  const badgeText = isEntry ? '+ ENTRADA' : isExit ? '- SALIDA' : '📦 BULTOS';
+
+  const resultingStock =
+    currentStock !== undefined
+      ? isEntry
+        ? currentStock + calculatedTotal
+        : Math.max(0, currentStock - calculatedTotal)
+      : null;
+
   return (
     <div
       id="bulk-to-units-modal"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-3 sm:p-4 animate-fade-in"
       onKeyDown={handleKeyDown}
     >
-      <div className="relative w-full max-w-sm sm:max-w-md bg-[#131620] border border-amber-500/25 rounded-[28px] overflow-hidden shadow-2xl flex flex-col max-h-[95vh] overflow-y-auto">
+      <div
+        className={`relative w-full max-w-sm sm:max-w-md bg-[#131620] border ${
+          isExit ? 'border-rose-500/30' : isEntry ? 'border-emerald-500/30' : 'border-amber-500/25'
+        } rounded-[28px] overflow-hidden shadow-2xl flex flex-col max-h-[95vh] overflow-y-auto`}
+      >
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 bg-[#0e111a]">
           <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center border border-amber-500/30 flex-shrink-0">
-              <span className="font-mono text-sm font-black">📦</span>
+            <div
+              className={`w-8 h-8 rounded-xl ${
+                isExit
+                  ? 'bg-rose-500/20 text-rose-400 border-rose-500/30'
+                  : isEntry
+                  ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                  : 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+              } flex items-center justify-center border flex-shrink-0`}
+            >
+              {isEntry ? (
+                <ArrowDownLeft className="w-4 h-4 stroke-[3]" />
+              ) : isExit ? (
+                <ArrowUpRight className="w-4 h-4 stroke-[3]" />
+              ) : (
+                <span className="font-mono text-sm font-black">📦</span>
+              )}
             </div>
             <div className="min-w-0">
-              <h3 className="text-sm font-bold text-white truncate">
-                Asistente de Carga por Bultos
-              </h3>
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-bold text-white truncate">{titleText}</h3>
+                <span className={`px-2 py-0.5 rounded-full text-[9px] font-black border ${badgeColor}`}>
+                  {badgeText}
+                </span>
+              </div>
               {productName && (
-                <p className="text-[10px] text-zinc-400 truncate">{productName}</p>
+                <p className="text-[11px] text-zinc-400 truncate mt-0.5 font-medium">{productName}</p>
               )}
             </div>
           </div>
@@ -335,13 +397,46 @@ export const BulkToUnitsModal: React.FC<BulkToUnitsModalProps> = ({
             </div>
             <div className="flex items-center justify-between pt-1.5 border-t border-white/5">
               <span className="text-xs sm:text-sm font-semibold text-white">
-                Total Unidades Físicas:
+                {isEntry
+                  ? 'Total Unidades a Sumar:'
+                  : isExit
+                  ? 'Total Unidades a Restar:'
+                  : 'Total Unidades Físicas:'}
               </span>
-              <div className="flex items-baseline gap-1 font-mono text-2xl sm:text-3xl font-black text-emerald-400">
-                <span>{calculatedTotal.toLocaleString()}</span>
+              <div
+                className={`flex items-baseline gap-1 font-mono text-2xl sm:text-3xl font-black ${
+                  isExit ? 'text-rose-400' : 'text-emerald-400'
+                }`}
+              >
+                <span>
+                  {isEntry ? '+' : isExit ? '–' : ''}
+                  {calculatedTotal.toLocaleString()}
+                </span>
                 <span className="text-xs font-normal text-zinc-400">uds</span>
               </div>
             </div>
+
+            {/* Impact preview when in stock movement mode */}
+            {isMovement && currentStock !== undefined && (
+              <div className="mt-2 pt-2 border-t border-white/5 flex items-center justify-between text-xs font-mono">
+                <span className="text-zinc-400">Impacto en Stock:</span>
+                <div className="flex items-center gap-1.5 font-bold">
+                  <span className="text-zinc-400">{currentStock} uds</span>
+                  <span className="text-zinc-500">→</span>
+                  <span className={isExit ? 'text-rose-300' : 'text-emerald-300'}>
+                    {resultingStock} uds
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Warning if Exit exceeds physical stock */}
+            {isExit && currentStock !== undefined && calculatedTotal > currentStock && (
+              <div className="mt-2 p-1.5 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-300 text-[10px] flex items-center gap-1">
+                <AlertTriangle className="w-3.5 h-3.5 text-rose-400 flex-shrink-0" />
+                <span>Atención: El egreso ({calculatedTotal} uds) supera el stock registrado ({currentStock} uds).</span>
+              </div>
+            )}
           </div>
 
           {/* 3 Main Visual Rows (Visual Card Layout from Screenshot_2026-09-26-12-24-38-687.jpg) */}
@@ -541,15 +636,26 @@ export const BulkToUnitsModal: React.FC<BulkToUnitsModalProps> = ({
             </div>
           </div>
 
-          {/* Bottom Confirm Button: Vibrant Green with double check icon (matching Screenshot) */}
+          {/* Bottom Confirm Button: Dynamic color and label for Entrada (+X uds), Salida (-X uds) or Ingreso */}
           <div className="pt-1.5">
             <button
               id="btn-confirm-bulk-to-units"
               type="submit"
-              className="w-full py-3.5 px-4 bg-[#10b981] hover:bg-[#059669] active:bg-[#047857] text-white font-black text-base sm:text-lg rounded-2xl shadow-xl flex items-center justify-center gap-2 active:scale-95 transition-all cursor-pointer"
+              disabled={calculatedTotal <= 0}
+              className={`w-full py-3.5 px-4 ${
+                isExit
+                  ? 'bg-rose-600 hover:bg-rose-500 active:bg-rose-700'
+                  : 'bg-[#10b981] hover:bg-[#059669] active:bg-[#047857]'
+              } disabled:opacity-40 text-white font-black text-base sm:text-lg rounded-2xl shadow-xl flex items-center justify-center gap-2 active:scale-95 transition-all cursor-pointer`}
             >
               <Check className="w-6 h-6 stroke-[3]" />
-              <span>✓ Confirmar Ingreso ({calculatedTotal.toLocaleString()} uds)</span>
+              <span>
+                {isEntry
+                  ? `✓ Confirmar Entrada (+${calculatedTotal.toLocaleString()} uds)`
+                  : isExit
+                  ? `✓ Confirmar Salida (–${calculatedTotal.toLocaleString()} uds)`
+                  : `✓ Confirmar Ingreso (${calculatedTotal.toLocaleString()} uds)`}
+              </span>
             </button>
           </div>
         </form>
