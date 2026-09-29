@@ -14,6 +14,8 @@ export interface BulkToUnitsModalProps {
   currentStock?: number;
 }
 
+type ActiveField = 'unitsPerBulk' | 'bultos' | 'looseUnits';
+
 /**
  * 3D Isometric Boxes Cluster (Neon Amber) matching Screenshot_2026-09-26-12-24-38-687.jpg
  */
@@ -233,7 +235,13 @@ export const BulkToUnitsModal: React.FC<BulkToUnitsModalProps> = ({
     String(initialUnitsPerBulk > 0 ? initialUnitsPerBulk : 12)
   );
   const [looseUnits, setLooseUnits] = useState<string>('');
+  
+  // Requirement 4: Initial active field is 'bultos' by default
+  const [activeField, setActiveField] = useState<ActiveField>('bultos');
+
   const bultosInputRef = useRef<HTMLInputElement>(null);
+  const unitsPerBulkInputRef = useRef<HTMLInputElement>(null);
+  const looseUnitsInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -241,11 +249,12 @@ export const BulkToUnitsModal: React.FC<BulkToUnitsModalProps> = ({
       setUnitsPerBulk(String(upb));
       setBultos('');
       setLooseUnits('');
+      // Requirement 4: Foco por defecto en Cantidad de Bultos
+      setActiveField('bultos');
 
       setTimeout(() => {
         if (bultosInputRef.current) {
           bultosInputRef.current.focus();
-          bultosInputRef.current.select();
         }
       }, 100);
     }
@@ -273,14 +282,50 @@ export const BulkToUnitsModal: React.FC<BulkToUnitsModalProps> = ({
   // Formula: (Bultos * Unidades por Bulto) + Unidades Sueltas
   const calculatedTotal = Math.max(0, numBultos * numUnitsPerBulk + numLooseUnits);
 
-  // Keypad delta addition to bultos in real time
-  const handleAddBultos = (amount: number) => {
+  // Requirement 3: Contextual Keypad Actions
+  // 1. For Bultos (Campo Naranja): Accumulative addition/subtraction
+  const handleBultosKey = (amount: number) => {
     Sound.playScanBeep();
     setBultos((prev) => {
       const current = parseInt(prev, 10) || 0;
       const next = Math.max(0, current + amount);
       return next > 0 ? String(next) : '';
     });
+  };
+
+  // 2. For UnitsPerBulk (Campo Azul): Factory standard presets or +/- 1
+  const handleUnitsPerBulkPreset = (val: number) => {
+    Sound.playScanBeep();
+    setUnitsPerBulk(String(val));
+  };
+
+  const handleUnitsPerBulkAdjust = (delta: number) => {
+    Sound.playScanBeep();
+    setUnitsPerBulk((prev) => {
+      const current = parseInt(prev, 10) || 0;
+      const next = Math.max(1, current + delta);
+      return String(next);
+    });
+  };
+
+  const handleClearUnitsPerBulk = () => {
+    Sound.playScanBeep();
+    setUnitsPerBulk('');
+  };
+
+  // 3. For LooseUnits (Campo Verde Agua): Accumulative addition/subtraction
+  const handleLooseUnitsKey = (amount: number) => {
+    Sound.playScanBeep();
+    setLooseUnits((prev) => {
+      const current = parseInt(prev, 10) || 0;
+      const next = Math.max(0, current + amount);
+      return next > 0 ? String(next) : '';
+    });
+  };
+
+  const handleClearLooseUnits = () => {
+    Sound.playScanBeep();
+    setLooseUnits('');
   };
 
   const handleConfirm = (e?: React.FormEvent) => {
@@ -387,7 +432,7 @@ export const BulkToUnitsModal: React.FC<BulkToUnitsModalProps> = ({
 
         {/* Modal Content */}
         <form onSubmit={handleConfirm} className="p-3.5 sm:p-4 space-y-3">
-          {/* Top Real-time Calculation Card (matches screenshot top header) */}
+          {/* Top Real-time Calculation Card */}
           <div className="p-3 bg-[#0a0d14] rounded-2xl border border-white/10 shadow-inner">
             <div className="flex items-center justify-between text-xs text-zinc-400 mb-1">
               <span>Cálculo en vivo:</span>
@@ -439,10 +484,72 @@ export const BulkToUnitsModal: React.FC<BulkToUnitsModalProps> = ({
             )}
           </div>
 
-          {/* 3 Main Visual Rows (Visual Card Layout from Screenshot_2026-09-26-12-24-38-687.jpg) */}
+          {/* REQUIREMENT 1: Reordered fields with Field 1 (Azul) at the top */}
           <div className="space-y-2.5">
-            {/* Row 1: Cantidad de Bultos / Packs */}
-            <div className="flex items-center bg-[#0d1018] border border-amber-500/25 hover:border-amber-500/40 rounded-2xl p-2.5 sm:p-3 transition-colors shadow-sm">
+            {/* Field 1 (AZUL): Unidades que trae cada Bulto (Top priority data base) */}
+            <div
+              onClick={() => {
+                setActiveField('unitsPerBulk');
+                unitsPerBulkInputRef.current?.focus();
+              }}
+              className={`flex items-center rounded-2xl p-2.5 sm:p-3 transition-all shadow-sm cursor-pointer ${
+                activeField === 'unitsPerBulk'
+                  ? 'bg-[#0b172a] border-2 border-sky-400 ring-2 ring-sky-400/30'
+                  : 'bg-[#0d1018] border border-sky-500/25 hover:border-sky-500/40'
+              }`}
+            >
+              {/* Left Big 3D Stacked Layers Icon */}
+              <div className="w-16 h-16 sm:w-18 sm:h-18 flex items-center justify-center bg-black/40 rounded-2xl border border-sky-500/20 flex-shrink-0">
+                <StackedLayersIcon />
+              </div>
+
+              {/* Right Content: Title + Big Number */}
+              <div className="flex-1 min-w-0 pl-3 sm:pl-4">
+                <div className="flex items-center justify-between">
+                  <label
+                    htmlFor="bulk-modal-units-per-bulk-input"
+                    className="block text-xs sm:text-sm font-extrabold text-sky-400 tracking-wide cursor-pointer truncate"
+                  >
+                    Unidades que trae cada Bulto:
+                  </label>
+                  {activeField === 'unitsPerBulk' && (
+                    <span className="text-[9px] font-bold text-sky-300 bg-sky-500/20 border border-sky-500/40 px-1.5 py-0.5 rounded-md">
+                      Activo
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center justify-between mt-0.5">
+                  {/* REQUIREMENT 2: inputMode="none" to block Android native software keyboard */}
+                  <input
+                    ref={unitsPerBulkInputRef}
+                    id="bulk-modal-units-per-bulk-input"
+                    type="text"
+                    inputMode="none"
+                    value={unitsPerBulk}
+                    onFocus={() => setActiveField('unitsPerBulk')}
+                    readOnly
+                    placeholder="12"
+                    className="w-full bg-transparent border-0 p-0 text-2xl sm:text-3xl font-mono font-black text-sky-300 focus:outline-none placeholder:text-zinc-700 cursor-pointer"
+                  />
+                  <span className="text-xs font-bold text-zinc-500 font-mono flex-shrink-0">
+                    uds/cj
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Field 2 (NARANJA/ÁMBAR): Cantidad de Bultos / Packs */}
+            <div
+              onClick={() => {
+                setActiveField('bultos');
+                bultosInputRef.current?.focus();
+              }}
+              className={`flex items-center rounded-2xl p-2.5 sm:p-3 transition-all shadow-sm cursor-pointer ${
+                activeField === 'bultos'
+                  ? 'bg-[#1a1308] border-2 border-amber-400 ring-2 ring-amber-400/30'
+                  : 'bg-[#0d1018] border border-amber-500/25 hover:border-amber-500/40'
+              }`}
+            >
               {/* Left Big 3D Isometric Boxes Icon */}
               <div className="w-16 h-16 sm:w-18 sm:h-18 flex items-center justify-center bg-black/40 rounded-2xl border border-amber-500/20 flex-shrink-0">
                 <IsometricBoxesIcon />
@@ -450,29 +557,40 @@ export const BulkToUnitsModal: React.FC<BulkToUnitsModalProps> = ({
 
               {/* Right Content: Title + Big Number */}
               <div className="flex-1 min-w-0 pl-3 sm:pl-4">
-                <label
-                  htmlFor="bulk-modal-bultos-input"
-                  className="block text-xs sm:text-sm font-extrabold text-amber-400 tracking-wide cursor-pointer truncate"
-                >
-                  Cantidad de Bultos / Packs
-                </label>
+                <div className="flex items-center justify-between">
+                  <label
+                    htmlFor="bulk-modal-bultos-input"
+                    className="block text-xs sm:text-sm font-extrabold text-amber-400 tracking-wide cursor-pointer truncate"
+                  >
+                    Cantidad de Bultos / Packs
+                  </label>
+                  {activeField === 'bultos' && (
+                    <span className="text-[9px] font-bold text-amber-300 bg-amber-500/20 border border-amber-500/40 px-1.5 py-0.5 rounded-md">
+                      Activo
+                    </span>
+                  )}
+                </div>
                 <div className="flex items-center justify-between mt-0.5">
+                  {/* REQUIREMENT 2: inputMode="none" to block Android native software keyboard */}
                   <input
                     ref={bultosInputRef}
                     id="bulk-modal-bultos-input"
                     type="text"
-                    inputMode="numeric"
-                    pattern="[0-9]*"
+                    inputMode="none"
                     value={bultos}
-                    onFocus={(e) => e.target.select()}
-                    onChange={(e) => setBultos(e.target.value.replace(/[^0-9]/g, ''))}
+                    onFocus={() => setActiveField('bultos')}
+                    readOnly
                     placeholder="0"
-                    className="w-full bg-transparent border-0 p-0 text-3xl sm:text-4xl font-mono font-black text-amber-300 focus:outline-none placeholder:text-zinc-700"
+                    className="w-full bg-transparent border-0 p-0 text-3xl sm:text-4xl font-mono font-black text-amber-300 focus:outline-none placeholder:text-zinc-700 cursor-pointer"
                   />
                   {bultos && (
                     <button
                       type="button"
-                      onClick={() => setBultos('')}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setBultos('');
+                        setActiveField('bultos');
+                      }}
                       className="text-[10px] font-bold text-zinc-400 hover:text-white px-2 py-0.5 rounded-lg bg-white/5 hover:bg-white/10 ml-2 flex-shrink-0"
                     >
                       Borrar
@@ -482,42 +600,18 @@ export const BulkToUnitsModal: React.FC<BulkToUnitsModalProps> = ({
               </div>
             </div>
 
-            {/* Row 2: Unidades que trae cada Bulto */}
-            <div className="flex items-center bg-[#0d1018] border border-sky-500/25 hover:border-sky-500/40 rounded-2xl p-2.5 sm:p-3 transition-colors shadow-sm">
-              {/* Left Big 3D Stacked Layers Icon */}
-              <div className="w-16 h-16 sm:w-18 sm:h-18 flex items-center justify-center bg-black/40 rounded-2xl border border-sky-500/20 flex-shrink-0">
-                <StackedLayersIcon />
-              </div>
-
-              {/* Right Content: Title + Big Number */}
-              <div className="flex-1 min-w-0 pl-3 sm:pl-4">
-                <label
-                  htmlFor="bulk-modal-units-per-bulk-input"
-                  className="block text-xs sm:text-sm font-extrabold text-sky-400 tracking-wide cursor-pointer truncate"
-                >
-                  Unidades que trae cada Bulto:
-                </label>
-                <div className="flex items-center justify-between mt-0.5">
-                  <input
-                    id="bulk-modal-units-per-bulk-input"
-                    type="text"
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    value={unitsPerBulk}
-                    onFocus={(e) => e.target.select()}
-                    onChange={(e) => setUnitsPerBulk(e.target.value.replace(/[^0-9]/g, ''))}
-                    placeholder="12"
-                    className="w-full bg-transparent border-0 p-0 text-2xl sm:text-3xl font-mono font-black text-sky-300 focus:outline-none placeholder:text-zinc-700"
-                  />
-                  <span className="text-xs font-bold text-zinc-500 font-mono flex-shrink-0">
-                    uds/cj
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* Row 3: Unidades Sueltas */}
-            <div className="flex items-center bg-[#0d1018] border border-teal-500/25 hover:border-teal-500/40 rounded-2xl p-2.5 sm:p-3 transition-colors shadow-sm">
+            {/* Field 3 (VERDE AGUA/TEAL): Unidades Sueltas */}
+            <div
+              onClick={() => {
+                setActiveField('looseUnits');
+                looseUnitsInputRef.current?.focus();
+              }}
+              className={`flex items-center rounded-2xl p-2.5 sm:p-3 transition-all shadow-sm cursor-pointer ${
+                activeField === 'looseUnits'
+                  ? 'bg-[#081a17] border-2 border-teal-400 ring-2 ring-teal-400/30'
+                  : 'bg-[#0d1018] border border-teal-500/25 hover:border-teal-500/40'
+              }`}
+            >
               {/* Left Big Neon Plus Circle Icon */}
               <div className="w-16 h-16 sm:w-18 sm:h-18 flex items-center justify-center bg-black/40 rounded-2xl border border-teal-500/20 flex-shrink-0">
                 <PlusCircleNeonIcon />
@@ -525,115 +619,357 @@ export const BulkToUnitsModal: React.FC<BulkToUnitsModalProps> = ({
 
               {/* Right Content: Title + Big Number */}
               <div className="flex-1 min-w-0 pl-3 sm:pl-4">
-                <label
-                  htmlFor="bulk-modal-loose-units-input"
-                  className="block text-xs sm:text-sm font-extrabold text-teal-400 tracking-wide cursor-pointer truncate"
-                >
-                  Unidades Sueltas:
-                </label>
+                <div className="flex items-center justify-between">
+                  <label
+                    htmlFor="bulk-modal-loose-units-input"
+                    className="block text-xs sm:text-sm font-extrabold text-teal-400 tracking-wide cursor-pointer truncate"
+                  >
+                    Unidades Sueltas:
+                  </label>
+                  {activeField === 'looseUnits' && (
+                    <span className="text-[9px] font-bold text-teal-300 bg-teal-500/20 border border-teal-500/40 px-1.5 py-0.5 rounded-md">
+                      Activo
+                    </span>
+                  )}
+                </div>
                 <div className="flex items-center justify-between mt-0.5">
+                  {/* REQUIREMENT 2: inputMode="none" to block Android native software keyboard */}
                   <input
+                    ref={looseUnitsInputRef}
                     id="bulk-modal-loose-units-input"
                     type="text"
-                    inputMode="numeric"
-                    pattern="[0-9]*"
+                    inputMode="none"
                     value={looseUnits}
-                    onFocus={(e) => e.target.select()}
-                    onChange={(e) => setLooseUnits(e.target.value.replace(/[^0-9]/g, ''))}
+                    onFocus={() => setActiveField('looseUnits')}
+                    readOnly
                     placeholder="0"
-                    className="w-full bg-transparent border-0 p-0 text-3xl sm:text-4xl font-mono font-black text-emerald-400 focus:outline-none placeholder:text-zinc-700"
+                    className="w-full bg-transparent border-0 p-0 text-3xl sm:text-4xl font-mono font-black text-emerald-400 focus:outline-none placeholder:text-zinc-700 cursor-pointer"
                   />
-                  <span className="text-xs font-bold text-zinc-500 font-mono flex-shrink-0">
-                    sueltas
-                  </span>
+                  {looseUnits && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setLooseUnits('');
+                        setActiveField('looseUnits');
+                      }}
+                      className="text-[10px] font-bold text-zinc-400 hover:text-white px-2 py-0.5 rounded-lg bg-white/5 hover:bg-white/10 ml-2 flex-shrink-0"
+                    >
+                      Borrar
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Quick Keypad Grid of Boxes (matches Screenshot 3x3 layout) */}
+          {/* REQUIREMENT 3: DYNAMIC CONTEXTUAL KEYPAD GRID BASED ON activeField */}
           <div className="pt-1">
-            <div className="grid grid-cols-3 gap-2">
-              {/* Row 1: [ 1 Cj ]  [ 2 Cj ]  [ 3 Cj ] */}
-              <button
-                type="button"
-                id="btn-quick-1cj"
-                onClick={() => handleAddBultos(1)}
-                className="h-11 sm:h-12 rounded-2xl bg-[#1b1f2c] hover:bg-amber-500/20 active:bg-amber-500/30 text-white hover:text-amber-300 font-mono font-black text-sm sm:text-base border border-white/10 hover:border-amber-500/40 active:scale-95 transition-all flex items-center justify-center cursor-pointer shadow-sm select-none"
+            {/* Header info indicating which field is controlled */}
+            <div className="flex items-center justify-between mb-1.5 px-0.5">
+              <span
+                className={`text-[11px] font-black uppercase tracking-wider ${
+                  activeField === 'unitsPerBulk'
+                    ? 'text-sky-400'
+                    : activeField === 'bultos'
+                    ? 'text-amber-400'
+                    : 'text-teal-400'
+                }`}
               >
-                1 Cj
-              </button>
-              <button
-                type="button"
-                id="btn-quick-2cj"
-                onClick={() => handleAddBultos(2)}
-                className="h-11 sm:h-12 rounded-2xl bg-[#1b1f2c] hover:bg-amber-500/20 active:bg-amber-500/30 text-white hover:text-amber-300 font-mono font-black text-sm sm:text-base border border-white/10 hover:border-amber-500/40 active:scale-95 transition-all flex items-center justify-center cursor-pointer shadow-sm select-none"
-              >
-                2 Cj
-              </button>
-              <button
-                type="button"
-                id="btn-quick-3cj"
-                onClick={() => handleAddBultos(3)}
-                className="h-11 sm:h-12 rounded-2xl bg-[#1b1f2c] hover:bg-amber-500/20 active:bg-amber-500/30 text-white hover:text-amber-300 font-mono font-black text-sm sm:text-base border border-white/10 hover:border-amber-500/40 active:scale-95 transition-all flex items-center justify-center cursor-pointer shadow-sm select-none"
-              >
-                3 Cj
-              </button>
-
-              {/* Row 2: [ 5 Cj ]  [ 10 Cj ] [ 20 Cj ] */}
-              <button
-                type="button"
-                id="btn-quick-5cj"
-                onClick={() => handleAddBultos(5)}
-                className="h-11 sm:h-12 rounded-2xl bg-[#1b1f2c] hover:bg-amber-500/20 active:bg-amber-500/30 text-white hover:text-amber-300 font-mono font-black text-sm sm:text-base border border-white/10 hover:border-amber-500/40 active:scale-95 transition-all flex items-center justify-center cursor-pointer shadow-sm select-none"
-              >
-                5 Cj
-              </button>
-              <button
-                type="button"
-                id="btn-quick-10cj"
-                onClick={() => handleAddBultos(10)}
-                className="h-11 sm:h-12 rounded-2xl bg-[#1b1f2c] hover:bg-amber-500/20 active:bg-amber-500/30 text-white hover:text-amber-300 font-mono font-black text-sm sm:text-base border border-white/10 hover:border-amber-500/40 active:scale-95 transition-all flex items-center justify-center cursor-pointer shadow-sm select-none"
-              >
-                10 Cj
-              </button>
-              <button
-                type="button"
-                id="btn-quick-20cj"
-                onClick={() => handleAddBultos(20)}
-                className="h-11 sm:h-12 rounded-2xl bg-[#1b1f2c] hover:bg-amber-500/20 active:bg-amber-500/30 text-white hover:text-amber-300 font-mono font-black text-sm sm:text-base border border-white/10 hover:border-amber-500/40 active:scale-95 transition-all flex items-center justify-center cursor-pointer shadow-sm select-none"
-              >
-                20 Cj
-              </button>
-
-              {/* Row 3: [ 50 Cj ] [ + 1 Cj ]  [ - 1 Cj ] */}
-              <button
-                type="button"
-                id="btn-quick-50cj"
-                onClick={() => handleAddBultos(50)}
-                className="h-11 sm:h-12 rounded-2xl bg-[#1b1f2c] hover:bg-amber-500/20 active:bg-amber-500/30 text-white hover:text-amber-300 font-mono font-black text-sm sm:text-base border border-white/10 hover:border-amber-500/40 active:scale-95 transition-all flex items-center justify-center cursor-pointer shadow-sm select-none"
-              >
-                50 Cj
-              </button>
-              <button
-                type="button"
-                id="btn-quick-plus1cj"
-                onClick={() => handleAddBultos(1)}
-                className="h-11 sm:h-12 rounded-2xl bg-emerald-950/60 hover:bg-emerald-900/80 active:bg-emerald-800 text-emerald-300 font-mono font-black text-sm sm:text-base border border-emerald-500/40 active:scale-95 transition-all flex items-center justify-center gap-1 cursor-pointer shadow-sm select-none"
-                title="Sumar 1 bulto"
-              >
-                + 1 Cj
-              </button>
-              <button
-                type="button"
-                id="btn-quick-minus1cj"
-                onClick={() => handleAddBultos(-1)}
-                className="h-11 sm:h-12 rounded-2xl bg-rose-950/60 hover:bg-rose-900/80 active:bg-rose-800 text-rose-300 font-mono font-black text-sm sm:text-base border border-rose-500/40 active:scale-95 transition-all flex items-center justify-center gap-1 cursor-pointer shadow-sm select-none"
-                title="Restar 1 bulto"
-              >
-                – 1 Cj
-              </button>
+                {activeField === 'unitsPerBulk'
+                  ? 'Packs de Fábrica (Unidades por Bulto):'
+                  : activeField === 'bultos'
+                  ? 'Bultos Rápidos Acumulativos (Sumar):'
+                  : 'Unidades Sueltas Rápidas (Sumar):'}
+              </span>
+              <span className="text-[10px] text-zinc-400 font-mono">
+                {activeField === 'unitsPerBulk'
+                  ? `${unitsPerBulk || 0} uds/cj`
+                  : activeField === 'bultos'
+                  ? `${numBultos} bulto(s)`
+                  : `${numLooseUnits} suelta(s)`}
+              </span>
             </div>
+
+            {/* KEYPAD VARIANT 1: UNIDADES POR BULTO (CAMPO AZUL) */}
+            {activeField === 'unitsPerBulk' && (
+              <div className="grid grid-cols-3 gap-2 animate-fade-in">
+                {/* Row 1: [ 6 ]  [ 12 ]  [ 20 ] */}
+                <button
+                  type="button"
+                  id="btn-upb-6"
+                  onClick={() => handleUnitsPerBulkPreset(6)}
+                  className={`h-11 sm:h-12 rounded-2xl font-mono font-black text-base border active:scale-95 transition-all flex items-center justify-center cursor-pointer shadow-sm select-none ${
+                    unitsPerBulk === '6'
+                      ? 'bg-sky-500 text-black border-sky-400 shadow-sky-500/20'
+                      : 'bg-[#141b2c] hover:bg-sky-500/20 text-white hover:text-sky-300 border-white/10 hover:border-sky-500/40'
+                  }`}
+                >
+                  6
+                </button>
+                <button
+                  type="button"
+                  id="btn-upb-12"
+                  onClick={() => handleUnitsPerBulkPreset(12)}
+                  className={`h-11 sm:h-12 rounded-2xl font-mono font-black text-base border active:scale-95 transition-all flex items-center justify-center cursor-pointer shadow-sm select-none ${
+                    unitsPerBulk === '12'
+                      ? 'bg-sky-500 text-black border-sky-400 shadow-sky-500/20'
+                      : 'bg-[#141b2c] hover:bg-sky-500/20 text-white hover:text-sky-300 border-white/10 hover:border-sky-500/40'
+                  }`}
+                >
+                  12
+                </button>
+                <button
+                  type="button"
+                  id="btn-upb-20"
+                  onClick={() => handleUnitsPerBulkPreset(20)}
+                  className={`h-11 sm:h-12 rounded-2xl font-mono font-black text-base border active:scale-95 transition-all flex items-center justify-center cursor-pointer shadow-sm select-none ${
+                    unitsPerBulk === '20'
+                      ? 'bg-sky-500 text-black border-sky-400 shadow-sky-500/20'
+                      : 'bg-[#141b2c] hover:bg-sky-500/20 text-white hover:text-sky-300 border-white/10 hover:border-sky-500/40'
+                  }`}
+                >
+                  20
+                </button>
+
+                {/* Row 2: [ 24 ]  [ 30 ]  [ 36 ] */}
+                <button
+                  type="button"
+                  id="btn-upb-24"
+                  onClick={() => handleUnitsPerBulkPreset(24)}
+                  className={`h-11 sm:h-12 rounded-2xl font-mono font-black text-base border active:scale-95 transition-all flex items-center justify-center cursor-pointer shadow-sm select-none ${
+                    unitsPerBulk === '24'
+                      ? 'bg-sky-500 text-black border-sky-400 shadow-sky-500/20'
+                      : 'bg-[#141b2c] hover:bg-sky-500/20 text-white hover:text-sky-300 border-white/10 hover:border-sky-500/40'
+                  }`}
+                >
+                  24
+                </button>
+                <button
+                  type="button"
+                  id="btn-upb-30"
+                  onClick={() => handleUnitsPerBulkPreset(30)}
+                  className={`h-11 sm:h-12 rounded-2xl font-mono font-black text-base border active:scale-95 transition-all flex items-center justify-center cursor-pointer shadow-sm select-none ${
+                    unitsPerBulk === '30'
+                      ? 'bg-sky-500 text-black border-sky-400 shadow-sky-500/20'
+                      : 'bg-[#141b2c] hover:bg-sky-500/20 text-white hover:text-sky-300 border-white/10 hover:border-sky-500/40'
+                  }`}
+                >
+                  30
+                </button>
+                <button
+                  type="button"
+                  id="btn-upb-36"
+                  onClick={() => handleUnitsPerBulkPreset(36)}
+                  className={`h-11 sm:h-12 rounded-2xl font-mono font-black text-base border active:scale-95 transition-all flex items-center justify-center cursor-pointer shadow-sm select-none ${
+                    unitsPerBulk === '36'
+                      ? 'bg-sky-500 text-black border-sky-400 shadow-sky-500/20'
+                      : 'bg-[#141b2c] hover:bg-sky-500/20 text-white hover:text-sky-300 border-white/10 hover:border-sky-500/40'
+                  }`}
+                >
+                  36
+                </button>
+
+                {/* Row 3: [ +1 ]  [ -1 ]  [ Borrar ] */}
+                <button
+                  type="button"
+                  id="btn-upb-plus1"
+                  onClick={() => handleUnitsPerBulkAdjust(1)}
+                  className="h-11 sm:h-12 rounded-2xl bg-sky-950/60 hover:bg-sky-900/80 active:bg-sky-800 text-sky-300 font-mono font-black text-sm sm:text-base border border-sky-500/40 active:scale-95 transition-all flex items-center justify-center cursor-pointer shadow-sm select-none"
+                  title="Sumar 1 unidad al bulto"
+                >
+                  +1
+                </button>
+                <button
+                  type="button"
+                  id="btn-upb-minus1"
+                  onClick={() => handleUnitsPerBulkAdjust(-1)}
+                  className="h-11 sm:h-12 rounded-2xl bg-sky-950/60 hover:bg-sky-900/80 active:bg-sky-800 text-sky-300 font-mono font-black text-sm sm:text-base border border-sky-500/40 active:scale-95 transition-all flex items-center justify-center cursor-pointer shadow-sm select-none"
+                  title="Restar 1 unidad al bulto"
+                >
+                  -1
+                </button>
+                <button
+                  type="button"
+                  id="btn-upb-clear"
+                  onClick={handleClearUnitsPerBulk}
+                  className="h-11 sm:h-12 rounded-2xl bg-rose-950/60 hover:bg-rose-900/80 active:bg-rose-800 text-rose-300 font-mono font-black text-sm sm:text-base border border-rose-500/40 active:scale-95 transition-all flex items-center justify-center cursor-pointer shadow-sm select-none"
+                  title="Borrar unidades"
+                >
+                  Borrar
+                </button>
+              </div>
+            )}
+
+            {/* KEYPAD VARIANT 2: CANTIDAD DE BULTOS / PACKS (CAMPO NARANJA) */}
+            {activeField === 'bultos' && (
+              <div className="grid grid-cols-3 gap-2 animate-fade-in">
+                {/* Row 1: [ 1 Cj ]  [ 2 Cj ]  [ 3 Cj ] */}
+                <button
+                  type="button"
+                  id="btn-quick-1cj"
+                  onClick={() => handleBultosKey(1)}
+                  className="h-11 sm:h-12 rounded-2xl bg-[#1b1f2c] hover:bg-amber-500/20 active:bg-amber-500/30 text-white hover:text-amber-300 font-mono font-black text-sm sm:text-base border border-white/10 hover:border-amber-500/40 active:scale-95 transition-all flex items-center justify-center cursor-pointer shadow-sm select-none"
+                >
+                  1 Cj
+                </button>
+                <button
+                  type="button"
+                  id="btn-quick-2cj"
+                  onClick={() => handleBultosKey(2)}
+                  className="h-11 sm:h-12 rounded-2xl bg-[#1b1f2c] hover:bg-amber-500/20 active:bg-amber-500/30 text-white hover:text-amber-300 font-mono font-black text-sm sm:text-base border border-white/10 hover:border-amber-500/40 active:scale-95 transition-all flex items-center justify-center cursor-pointer shadow-sm select-none"
+                >
+                  2 Cj
+                </button>
+                <button
+                  type="button"
+                  id="btn-quick-3cj"
+                  onClick={() => handleBultosKey(3)}
+                  className="h-11 sm:h-12 rounded-2xl bg-[#1b1f2c] hover:bg-amber-500/20 active:bg-amber-500/30 text-white hover:text-amber-300 font-mono font-black text-sm sm:text-base border border-white/10 hover:border-amber-500/40 active:scale-95 transition-all flex items-center justify-center cursor-pointer shadow-sm select-none"
+                >
+                  3 Cj
+                </button>
+
+                {/* Row 2: [ 5 Cj ]  [ 10 Cj ] [ 20 Cj ] */}
+                <button
+                  type="button"
+                  id="btn-quick-5cj"
+                  onClick={() => handleBultosKey(5)}
+                  className="h-11 sm:h-12 rounded-2xl bg-[#1b1f2c] hover:bg-amber-500/20 active:bg-amber-500/30 text-white hover:text-amber-300 font-mono font-black text-sm sm:text-base border border-white/10 hover:border-amber-500/40 active:scale-95 transition-all flex items-center justify-center cursor-pointer shadow-sm select-none"
+                >
+                  5 Cj
+                </button>
+                <button
+                  type="button"
+                  id="btn-quick-10cj"
+                  onClick={() => handleBultosKey(10)}
+                  className="h-11 sm:h-12 rounded-2xl bg-[#1b1f2c] hover:bg-amber-500/20 active:bg-amber-500/30 text-white hover:text-amber-300 font-mono font-black text-sm sm:text-base border border-white/10 hover:border-amber-500/40 active:scale-95 transition-all flex items-center justify-center cursor-pointer shadow-sm select-none"
+                >
+                  10 Cj
+                </button>
+                <button
+                  type="button"
+                  id="btn-quick-20cj"
+                  onClick={() => handleBultosKey(20)}
+                  className="h-11 sm:h-12 rounded-2xl bg-[#1b1f2c] hover:bg-amber-500/20 active:bg-amber-500/30 text-white hover:text-amber-300 font-mono font-black text-sm sm:text-base border border-white/10 hover:border-amber-500/40 active:scale-95 transition-all flex items-center justify-center cursor-pointer shadow-sm select-none"
+                >
+                  20 Cj
+                </button>
+
+                {/* Row 3: [ 50 Cj ] [ +1 Cj ]  [ -1 Cj ] */}
+                <button
+                  type="button"
+                  id="btn-quick-50cj"
+                  onClick={() => handleBultosKey(50)}
+                  className="h-11 sm:h-12 rounded-2xl bg-[#1b1f2c] hover:bg-amber-500/20 active:bg-amber-500/30 text-white hover:text-amber-300 font-mono font-black text-sm sm:text-base border border-white/10 hover:border-amber-500/40 active:scale-95 transition-all flex items-center justify-center cursor-pointer shadow-sm select-none"
+                >
+                  50 Cj
+                </button>
+                <button
+                  type="button"
+                  id="btn-quick-plus1cj"
+                  onClick={() => handleBultosKey(1)}
+                  className="h-11 sm:h-12 rounded-2xl bg-emerald-950/60 hover:bg-emerald-900/80 active:bg-emerald-800 text-emerald-300 font-mono font-black text-sm sm:text-base border border-emerald-500/40 active:scale-95 transition-all flex items-center justify-center gap-1 cursor-pointer shadow-sm select-none"
+                  title="Sumar 1 bulto"
+                >
+                  +1 Cj
+                </button>
+                <button
+                  type="button"
+                  id="btn-quick-minus1cj"
+                  onClick={() => handleBultosKey(-1)}
+                  className="h-11 sm:h-12 rounded-2xl bg-rose-950/60 hover:bg-rose-900/80 active:bg-rose-800 text-rose-300 font-mono font-black text-sm sm:text-base border border-rose-500/40 active:scale-95 transition-all flex items-center justify-center gap-1 cursor-pointer shadow-sm select-none"
+                  title="Restar 1 bulto"
+                >
+                  -1 Cj
+                </button>
+              </div>
+            )}
+
+            {/* KEYPAD VARIANT 3: UNIDADES SUELTAS (CAMPO VERDE AGUA) - IDÉNTICA EN ESTRUCTURA A BULTOS */}
+            {activeField === 'looseUnits' && (
+              <div className="grid grid-cols-3 gap-2 animate-fade-in">
+                {/* Row 1: [ 1 Ud ]  [ 2 Ud ]  [ 3 Ud ] */}
+                <button
+                  type="button"
+                  id="btn-loose-1ud"
+                  onClick={() => handleLooseUnitsKey(1)}
+                  className="h-11 sm:h-12 rounded-2xl bg-[#122220] hover:bg-teal-500/20 active:bg-teal-500/30 text-white hover:text-emerald-300 font-mono font-black text-sm sm:text-base border border-teal-500/30 hover:border-teal-400 active:scale-95 transition-all flex items-center justify-center cursor-pointer shadow-sm select-none"
+                >
+                  1 Ud
+                </button>
+                <button
+                  type="button"
+                  id="btn-loose-2ud"
+                  onClick={() => handleLooseUnitsKey(2)}
+                  className="h-11 sm:h-12 rounded-2xl bg-[#122220] hover:bg-teal-500/20 active:bg-teal-500/30 text-white hover:text-emerald-300 font-mono font-black text-sm sm:text-base border border-teal-500/30 hover:border-teal-400 active:scale-95 transition-all flex items-center justify-center cursor-pointer shadow-sm select-none"
+                >
+                  2 Ud
+                </button>
+                <button
+                  type="button"
+                  id="btn-loose-3ud"
+                  onClick={() => handleLooseUnitsKey(3)}
+                  className="h-11 sm:h-12 rounded-2xl bg-[#122220] hover:bg-teal-500/20 active:bg-teal-500/30 text-white hover:text-emerald-300 font-mono font-black text-sm sm:text-base border border-teal-500/30 hover:border-teal-400 active:scale-95 transition-all flex items-center justify-center cursor-pointer shadow-sm select-none"
+                >
+                  3 Ud
+                </button>
+
+                {/* Row 2: [ 5 Ud ]  [ 10 Ud ] [ 20 Ud ] */}
+                <button
+                  type="button"
+                  id="btn-loose-5ud"
+                  onClick={() => handleLooseUnitsKey(5)}
+                  className="h-11 sm:h-12 rounded-2xl bg-[#122220] hover:bg-teal-500/20 active:bg-teal-500/30 text-white hover:text-emerald-300 font-mono font-black text-sm sm:text-base border border-teal-500/30 hover:border-teal-400 active:scale-95 transition-all flex items-center justify-center cursor-pointer shadow-sm select-none"
+                >
+                  5 Ud
+                </button>
+                <button
+                  type="button"
+                  id="btn-loose-10ud"
+                  onClick={() => handleLooseUnitsKey(10)}
+                  className="h-11 sm:h-12 rounded-2xl bg-[#122220] hover:bg-teal-500/20 active:bg-teal-500/30 text-white hover:text-emerald-300 font-mono font-black text-sm sm:text-base border border-teal-500/30 hover:border-teal-400 active:scale-95 transition-all flex items-center justify-center cursor-pointer shadow-sm select-none"
+                >
+                  10 Ud
+                </button>
+                <button
+                  type="button"
+                  id="btn-loose-20ud"
+                  onClick={() => handleLooseUnitsKey(20)}
+                  className="h-11 sm:h-12 rounded-2xl bg-[#122220] hover:bg-teal-500/20 active:bg-teal-500/30 text-white hover:text-emerald-300 font-mono font-black text-sm sm:text-base border border-teal-500/30 hover:border-teal-400 active:scale-95 transition-all flex items-center justify-center cursor-pointer shadow-sm select-none"
+                >
+                  20 Ud
+                </button>
+
+                {/* Row 3: [ 50 Ud ] [ +1 Ud ]  [ -1 Ud ] */}
+                <button
+                  type="button"
+                  id="btn-loose-50ud"
+                  onClick={() => handleLooseUnitsKey(50)}
+                  className="h-11 sm:h-12 rounded-2xl bg-[#122220] hover:bg-teal-500/20 active:bg-teal-500/30 text-white hover:text-emerald-300 font-mono font-black text-sm sm:text-base border border-teal-500/30 hover:border-teal-400 active:scale-95 transition-all flex items-center justify-center cursor-pointer shadow-sm select-none"
+                >
+                  50 Ud
+                </button>
+                <button
+                  type="button"
+                  id="btn-loose-plus1ud"
+                  onClick={() => handleLooseUnitsKey(1)}
+                  className="h-11 sm:h-12 rounded-2xl bg-emerald-950/60 hover:bg-emerald-900/80 active:bg-emerald-800 text-emerald-300 font-mono font-black text-sm sm:text-base border border-emerald-500/40 active:scale-95 transition-all flex items-center justify-center gap-1 cursor-pointer shadow-sm select-none"
+                  title="Sumar 1 unidad suelta"
+                >
+                  +1 Ud
+                </button>
+                <button
+                  type="button"
+                  id="btn-loose-minus1ud"
+                  onClick={() => handleLooseUnitsKey(-1)}
+                  className="h-11 sm:h-12 rounded-2xl bg-rose-950/60 hover:bg-rose-900/80 active:bg-rose-800 text-rose-300 font-mono font-black text-sm sm:text-base border border-rose-500/40 active:scale-95 transition-all flex items-center justify-center gap-1 cursor-pointer shadow-sm select-none"
+                  title="Restar 1 unidad suelta"
+                >
+                  –1 Ud
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Bottom Confirm Button: Dynamic color and label for Entrada (+X uds), Salida (-X uds) or Ingreso */}
