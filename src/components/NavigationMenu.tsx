@@ -13,6 +13,7 @@ import {
   RefreshCw,
   Boxes,
   ShoppingCart,
+  Zap,
   MoreHorizontal,
   X,
   Users,
@@ -47,6 +48,7 @@ export const NavigationMenu: React.FC<NavigationMenuProps> = ({
 
   const mainTabs: { id: AppTab; label: string; icon: React.FC<{ className?: string }>; badge?: number }[] = [
     { id: 'inventory', label: 'Stock', icon: LayoutGrid },
+    { id: 'dummies', label: 'Ráfaga Dummies', icon: Zap },
     { id: 'replenishment', label: 'Reposición', icon: Boxes, badge: repositionCount },
     { id: 'shopping', label: 'Compras', icon: ShoppingCart },
     { id: 'movements', label: 'Movimientos', icon: ArrowUpDown },

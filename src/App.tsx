@@ -27,6 +27,7 @@ import { SyncView } from './components/SyncView';
 import { SettingsView } from './components/SettingsView';
 import { ShoppingListView } from './components/ShoppingListView';
 import { ReplenishmentView } from './components/ReplenishmentView';
+import { DummiesBurstScannerView } from './components/DummiesBurstScannerView';
 import { UserManagementView } from './components/UserManagementView';
 import { UserLoginModal } from './components/UserLoginModal';
 import { WelcomeLoginScreen } from './components/WelcomeLoginScreen';
@@ -447,36 +448,47 @@ export default function App() {
     <div className="min-h-screen bg-[#0a0c12] text-zinc-100 font-sans flex justify-center selection:bg-teal-500 selection:text-black">
       {/* Centered Android device container */}
       <div className="w-full max-w-lg min-h-screen bg-[#0f1118] border-x border-white/5 flex flex-col relative shadow-2xl overflow-x-hidden">
-        {/* Android Header (Status bar removed per user instructions) */}
-        <AndroidHeader
-          settings={settings}
-          lowStockCount={lowStockCount}
-          onOpenAlerts={() => setCurrentTab('alerts')}
-          onOpenSync={() => setCurrentTab('sync')}
-          onScanBarcode={handleOpenSearchScanner}
-          searchQuery={searchQuery}
-          onSearchChange={setSearchQuery}
-          currentUser={currentUser}
-          onOpenUserAuth={() => setUserLoginModalOpen(true)}
-          onLogout={handleLogout}
-        />
+        {/* Android Header (Status bar removed per user instructions; hidden on Dummies Burst Scanner for full viewport) */}
+        {currentTab !== 'dummies' && (
+          <AndroidHeader
+            settings={settings}
+            lowStockCount={lowStockCount}
+            onOpenAlerts={() => setCurrentTab('alerts')}
+            onOpenSync={() => setCurrentTab('sync')}
+            onScanBarcode={handleOpenSearchScanner}
+            searchQuery={searchQuery}
+            onSearchChange={setSearchQuery}
+            currentUser={currentUser}
+            onOpenUserAuth={() => setUserLoginModalOpen(true)}
+            onLogout={handleLogout}
+          />
+        )}
 
         {/* Real-time In-App Push Notification Banner */}
-        <InAppPushBanner
-          onNavigateToAlerts={() => setCurrentTab('alerts')}
-          onNavigateToProduct={(pId) => {
-            const found = products.find((p) => p.id === pId);
-            if (found) {
-              setDetailProduct(found);
-              setDetailModalOpen(true);
-            } else {
-              setCurrentTab('alerts');
-            }
-          }}
-        />
+        {currentTab !== 'dummies' && (
+          <InAppPushBanner
+            onNavigateToAlerts={() => setCurrentTab('alerts')}
+            onNavigateToProduct={(pId) => {
+              const found = products.find((p) => p.id === pId);
+              if (found) {
+                setDetailProduct(found);
+                setDetailModalOpen(true);
+              } else {
+                setCurrentTab('alerts');
+              }
+            }}
+          />
+        )}
 
         {/* Tab Content */}
-        <main className="flex-1 overflow-y-auto">
+        <main className={`flex-1 ${currentTab === 'dummies' ? 'overflow-hidden' : 'overflow-y-auto'}`}>
+          {currentTab === 'dummies' && (
+            <DummiesBurstScannerView
+              products={products}
+              onDataUpdated={reloadAllData}
+            />
+          )}
+
           {currentTab === 'inventory' && (
             <div className="space-y-2 pb-24 animate-fade-in">
               {/* Header Toggle matching user screenshot */}

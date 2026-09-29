@@ -20,13 +20,14 @@ export const ShoppingService = {
     localStorage.setItem(SHOPPING_STORAGE_KEY, JSON.stringify(items));
   },
 
-  addToShoppingList(productId: string, customNotes?: string): ShoppingListItem[] {
+  addToShoppingList(productId: string, customNotes?: string, targetQuantity?: string): ShoppingListItem[] {
     const list = this.getShoppingList();
     if (!list.some((item) => item.productId === productId)) {
       list.push({
         id: `shop-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         productId,
         customNotes,
+        targetQuantity,
         addedAt: new Date().toISOString(),
       });
       this.saveShoppingList(list);

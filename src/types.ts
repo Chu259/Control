@@ -178,6 +178,7 @@ export interface StoreSettings {
 
 export type AppTab =
   | 'inventory'
+  | 'dummies'
   | 'scanner'
   | 'replenishment'
   | 'shopping'

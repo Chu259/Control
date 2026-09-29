@@ -13,6 +13,7 @@ interface AndroidHeaderProps {
   currentUser?: AppUser;
   onOpenUserAuth?: () => void;
   onLogout?: () => void;
+  currentTab?: string;
 }
 
 export const AndroidHeader: React.FC<AndroidHeaderProps> = ({
@@ -26,6 +27,7 @@ export const AndroidHeader: React.FC<AndroidHeaderProps> = ({
   currentUser,
   onOpenUserAuth,
   onLogout,
+  currentTab,
 }) => {
   const syncConfig = settings.syncConfig;
   const isMaster = syncConfig?.role !== 'client';
@@ -128,56 +130,58 @@ export const AndroidHeader: React.FC<AndroidHeaderProps> = ({
         </div>
       </div>
 
-      {/* Quick Search Box with integrated Barcode Scan Button */}
-      <div className="px-4 pb-2.5">
-        <div className="flex items-center gap-2">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
-            <input
-              id="search-products-input"
-              type="text"
-              value={searchQuery}
-              onChange={(e) => onSearchChange(e.target.value)}
-              placeholder="Buscar por nombre, código de unidad o bulto..."
-              className="w-full bg-[#161922] border border-white/10 rounded-xl pl-9 pr-16 py-2 text-xs text-white placeholder:text-zinc-500 focus:outline-none focus:border-amber-400/70 transition-colors"
-            />
-            <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
-              {searchQuery && (
-                <button
-                  onClick={() => onSearchChange('')}
-                  className="text-zinc-400 hover:text-white text-xs px-1"
-                  title="Limpiar búsqueda"
-                >
-                  ✕
-                </button>
-              )}
-              {onScanBarcode && (
-                <button
-                  type="button"
-                  onClick={onScanBarcode}
-                  className="p-1 rounded-md text-amber-400 hover:text-amber-300 hover:bg-white/10 transition-colors"
-                  title="Escanear código de barra con la cámara"
-                >
-                  <Barcode className="w-4 h-4" />
-                </button>
-              )}
+      {/* Quick Search Box with integrated Barcode Scan Button (hidden in full-screen burst scanner) */}
+      {currentTab !== 'dummies' && (
+        <div className="px-4 pb-2.5">
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
+              <input
+                id="search-products-input"
+                type="text"
+                value={searchQuery}
+                onChange={(e) => onSearchChange(e.target.value)}
+                placeholder="Buscar por nombre, código de unidad o bulto..."
+                className="w-full bg-[#161922] border border-white/10 rounded-xl pl-9 pr-16 py-2 text-xs text-white placeholder:text-zinc-500 focus:outline-none focus:border-amber-400/70 transition-colors"
+              />
+              <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                {searchQuery && (
+                  <button
+                    onClick={() => onSearchChange('')}
+                    className="text-zinc-400 hover:text-white text-xs px-1"
+                    title="Limpiar búsqueda"
+                  >
+                    ✕
+                  </button>
+                )}
+                {onScanBarcode && (
+                  <button
+                    type="button"
+                    onClick={onScanBarcode}
+                    className="p-1 rounded-md text-amber-400 hover:text-amber-300 hover:bg-white/10 transition-colors"
+                    title="Escanear código de barra con la cámara"
+                  >
+                    <Barcode className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
             </div>
-          </div>
 
-          {onScanBarcode && (
-            <button
-              id="header-barcode-scan-btn"
-              type="button"
-              onClick={onScanBarcode}
-              className="h-[34px] px-3 rounded-xl bg-gradient-to-r from-amber-500/20 to-yellow-500/20 hover:from-amber-500/30 hover:to-yellow-500/30 border border-amber-500/40 text-amber-300 hover:text-amber-200 flex items-center gap-1.5 text-xs font-bold shadow-md active:scale-95 transition-all flex-shrink-0"
-              title="Escanear código de barra (Unidad / Bulto)"
-            >
-              <Camera className="w-3.5 h-3.5 text-amber-400" />
-              <span>Escanear</span>
-            </button>
-          )}
+            {onScanBarcode && (
+              <button
+                id="header-barcode-scan-btn"
+                type="button"
+                onClick={onScanBarcode}
+                className="h-[34px] px-3 rounded-xl bg-gradient-to-r from-amber-500/20 to-yellow-500/20 hover:from-amber-500/30 hover:to-yellow-500/30 border border-amber-500/40 text-amber-300 hover:text-amber-200 flex items-center gap-1.5 text-xs font-bold shadow-md active:scale-95 transition-all flex-shrink-0"
+                title="Escanear código de barra (Unidad / Bulto)"
+              >
+                <Camera className="w-3.5 h-3.5 text-amber-400" />
+                <span>Escanear</span>
+              </button>
+            )}
+          </div>
         </div>
-      </div>
+      )}
     </header>
   );
 };
