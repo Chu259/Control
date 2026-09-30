@@ -101,6 +101,7 @@ export const DummiesBurstScannerView: React.FC<DummiesBurstScannerViewProps> = (
   const currentBatchRef = useRef<BatchStats>({ bulks: 0, units: 0, totalUnits: 0, count: 0 });
   const batchFinalizedRef = useRef<boolean>(false);
   const batchInactivityTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const batchDismissTimerRef = useRef<NodeJS.Timeout | null>(null);
   const [batchSummary, setBatchSummary] = useState<BatchStats | null>(null);
 
   // Session history
@@ -213,6 +214,10 @@ export const DummiesBurstScannerView: React.FC<DummiesBurstScannerViewProps> = (
     if (batchInactivityTimerRef.current) {
       clearTimeout(batchInactivityTimerRef.current);
       batchInactivityTimerRef.current = null;
+    }
+    if (batchDismissTimerRef.current) {
+      clearTimeout(batchDismissTimerRef.current);
+      batchDismissTimerRef.current = null;
     }
     if (volatileImpactTimerRef.current) {
       clearTimeout(volatileImpactTimerRef.current);
@@ -329,7 +334,11 @@ export const DummiesBurstScannerView: React.FC<DummiesBurstScannerViewProps> = (
       return;
     }
 
-    // REQUIREMENT 3: Destruir de forma automática el recuadro de tanda al detectar un nuevo producto
+    // REQUIREMENT 2: Destruir de forma automática el recuadro de tanda al detectar un nuevo producto
+    if (batchDismissTimerRef.current) {
+      clearTimeout(batchDismissTimerRef.current);
+      batchDismissTimerRef.current = null;
+    }
     if (batchFinalizedRef.current) {
       currentBatchRef.current = { bulks: 0, units: 0, totalUnits: 0, count: 0 };
       batchFinalizedRef.current = false;
@@ -359,7 +368,7 @@ export const DummiesBurstScannerView: React.FC<DummiesBurstScannerViewProps> = (
         isBulk ? `Ráfaga: +1 Bulto (+${unitsPerBulk} uds)` : 'Ráfaga: +1 Unidad suelta'
       );
 
-      // REQUIREMENT 1: Cartel superior compacto: sólo nombre del producto e icono (sin números para no tapar)
+      // Cartel superior compacto: sólo nombre del producto e icono (sin números para no tapar)
       setLastFeedback({
         type: 'success',
         title: product.name,
@@ -386,7 +395,7 @@ export const DummiesBurstScannerView: React.FC<DummiesBurstScannerViewProps> = (
 
       const updatedProd = StorageService.getProducts().find((p) => p.id === product.id);
 
-      // REQUIREMENT 1: Cartel superior compacto
+      // Cartel superior compacto
       setLastFeedback({
         type: 'success',
         title: product.name,
@@ -401,12 +410,26 @@ export const DummiesBurstScannerView: React.FC<DummiesBurstScannerViewProps> = (
       setLastFeedback(null);
     }, 1800);
 
-    // REQUIREMENT 2: Contador Volátil Flotante Gigante (Al Centro del visor, arriba de 'RÁFAGA CONTINUA ACTIVA')
-    // Desvanece hacia arriba (fade-out) en 1.5s
-    const impactText = isBulk ? `+${unitsPerBulk}` : '+1';
+    // 1. Acumular a la tanda actual en curso
+    if (isBulk) {
+      currentBatchRef.current.bulks += 1;
+      currentBatchRef.current.totalUnits += unitsPerBulk;
+    } else {
+      currentBatchRef.current.units += 1;
+      currentBatchRef.current.totalUnits += 1;
+    }
+    currentBatchRef.current.count += 1;
+
+    // REQUIREMENT 1: Contador Progresivo Acumulativo (Texto grande flotante al centro del visor)
+    // - Si está en Modo Bulto: cada pitido muestra de forma progresiva: [ 1 Bulto ] -> [ 2 Bultos ] -> [ 3 Bultos ], etc.
+    // - Si está en Modo Unidad: muestra de forma progresiva: [ 1 Ud ] -> [ 2 Ud ] -> [ 3 Ud ], etc.
+    const progressiveText = isBulk
+      ? `${currentBatchRef.current.bulks} ${currentBatchRef.current.bulks === 1 ? 'Bulto' : 'Bultos'}`
+      : `${currentBatchRef.current.units} Ud`;
+
     setVolatileImpact({
       id: Date.now(),
-      text: impactText,
+      text: progressiveText,
       mode: isBulk ? 'bulk' : 'unit',
     });
 
@@ -417,16 +440,7 @@ export const DummiesBurstScannerView: React.FC<DummiesBurstScannerViewProps> = (
       setVolatileImpact(null);
     }, 1500);
 
-    // REQUIREMENT 3: Acumular tanda actual y reiniciar temporizador de inactividad de 3 segundos
-    if (isBulk) {
-      currentBatchRef.current.bulks += 1;
-      currentBatchRef.current.totalUnits += unitsPerBulk;
-    } else {
-      currentBatchRef.current.units += 1;
-      currentBatchRef.current.totalUnits += 1;
-    }
-    currentBatchRef.current.count += 1;
-
+    // REQUIREMENT 2: Recuadro de Cierre de Tanda (Temporizador de 3s con Auto-Desvanecimiento de 3s adicionales)
     if (batchInactivityTimerRef.current) {
       clearTimeout(batchInactivityTimerRef.current);
     }
@@ -434,6 +448,15 @@ export const DummiesBurstScannerView: React.FC<DummiesBurstScannerViewProps> = (
       if (currentBatchRef.current.count > 0) {
         setBatchSummary({ ...currentBatchRef.current });
         batchFinalizedRef.current = true;
+
+        // Auto-desvanecer o cerrar por completo tras 3 segundos más, dejando el visor 100% limpio
+        if (batchDismissTimerRef.current) {
+          clearTimeout(batchDismissTimerRef.current);
+        }
+        batchDismissTimerRef.current = setTimeout(() => {
+          setBatchSummary(null);
+          batchDismissTimerRef.current = null;
+        }, 3000);
       }
     }, 3000);
 
@@ -515,17 +538,17 @@ export const DummiesBurstScannerView: React.FC<DummiesBurstScannerViewProps> = (
             {/* Top spacing spacer */}
             <div className="h-2 pointer-events-none" />
 
-            {/* REQUIREMENT 2: CONTADOR VOLÁTIL FLOTANTE GIGANTE (AL CENTRO, ARRIBA DE 'RÁFAGA CONTINUA ACTIVA') */}
+            {/* REQUIREMENT 1: CONTADOR PROGRESIVO ACUMULATIVO (AL CENTRO, ARRIBA DE 'RÁFAGA CONTINUA ACTIVA') */}
             {volatileImpact && (
               <div
                 key={volatileImpact.id}
-                className="absolute inset-0 flex items-center justify-center pointer-events-none z-20 pb-6"
+                className="absolute inset-0 flex items-center justify-center pointer-events-none z-20 pb-6 px-3 text-center"
               >
                 <span
-                  className={`font-black text-6xl sm:text-7xl tracking-tighter select-none ${
+                  className={`font-black text-4xl sm:text-5xl md:text-6xl tracking-tight whitespace-nowrap select-none drop-shadow-2xl ${
                     volatileImpact.mode === 'bulk'
-                      ? 'text-orange-400/90 drop-shadow-[0_0_30px_rgba(251,146,60,0.9)]'
-                      : 'text-teal-300/90 drop-shadow-[0_0_30px_rgba(45,212,191,0.9)]'
+                      ? 'text-orange-400 drop-shadow-[0_0_35px_rgba(251,146,60,0.95)]'
+                      : 'text-teal-300 drop-shadow-[0_0_35px_rgba(45,212,191,0.95)]'
                   }`}
                   style={{
                     animation: 'burstFloatFadeUp 1.5s cubic-bezier(0.16, 1, 0.3, 1) forwards',
@@ -646,9 +669,14 @@ export const DummiesBurstScannerView: React.FC<DummiesBurstScannerViewProps> = (
           </div>
         </div>
 
-        {/* REQUIREMENT 3: RECUADRO DE CIERRE DE TANDA (TEMPORIZADOR DE 3 SEGUNDOS DE INACTIVIDAD) */}
+        {/* REQUIREMENT 2: RECUADRO DE CIERRE DE TANDA (TEMPORIZADOR DE 3 SEGUNDOS DE INACTIVIDAD CON AUTO-DESVANECIMIENTO) */}
         {batchSummary && (
-          <div className="absolute inset-0 z-35 flex items-center justify-center p-4 pointer-events-none animate-scale-up">
+          <div
+            className="absolute inset-0 z-35 flex items-center justify-center p-4 pointer-events-none"
+            style={{
+              animation: 'batchFadeInOut 3s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+            }}
+          >
             <div className="pointer-events-auto max-w-sm w-full bg-[#0d1117]/95 border-2 border-amber-400/80 rounded-3xl p-5 shadow-[0_0_60px_rgba(0,0,0,0.9)] backdrop-blur-xl flex flex-col items-center text-center space-y-3">
               <div className="w-12 h-12 rounded-2xl bg-amber-500/20 border border-amber-400/40 text-amber-300 flex items-center justify-center shadow-lg shadow-amber-500/20">
                 <Boxes className="w-6 h-6 stroke-[2.5]" />
@@ -723,7 +751,7 @@ export const DummiesBurstScannerView: React.FC<DummiesBurstScannerViewProps> = (
           </div>
         )}
 
-        {/* Dynamic Keyframes for Volatile Impact */}
+        {/* Dynamic Keyframes for Volatile Impact and Batch Fade */}
         <style>{`
           @keyframes burstFloatFadeUp {
             0% {
@@ -741,6 +769,24 @@ export const DummiesBurstScannerView: React.FC<DummiesBurstScannerViewProps> = (
             100% {
               opacity: 0;
               transform: translateY(-70px) scale(1.28);
+            }
+          }
+          @keyframes batchFadeInOut {
+            0% {
+              opacity: 0;
+              transform: scale(0.92) translateY(12px);
+            }
+            8% {
+              opacity: 1;
+              transform: scale(1) translateY(0px);
+            }
+            75% {
+              opacity: 1;
+              transform: scale(1) translateY(0px);
+            }
+            100% {
+              opacity: 0;
+              transform: scale(0.95) translateY(-10px);
             }
           }
         `}</style>
