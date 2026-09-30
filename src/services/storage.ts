@@ -236,8 +236,185 @@ export const StorageService = {
     return products;
   },
 
+  // Cumulative restock addition for Ráfaga Dummies: increments Bultos or Unidades independently
+  accumulateProductReposition(
+    productId: string,
+    mode: 'bulk' | 'unit',
+    amount: number = 1,
+    notes?: string
+  ): { product: Product; bulksPending: number; unitsPending: number; totalUnits: number } | null {
+    const products = this.getProducts();
+    let product = products.find((p) => p.id === productId);
+
+    const localPending = this.getLocalPendingProducts();
+    const lpIndex = localPending.findIndex((p) => p.id === productId);
+
+    if (!product && lpIndex >= 0) {
+      product = { ...localPending[lpIndex] };
+      products.unshift(product);
+    }
+
+    if (!product) return null;
+
+    const unitsPerBulk = Math.max(1, product.unitsPerBulk || 12);
+
+    // Read existing independent counters
+    let currentBulks = 0;
+    let currentUnits = 0;
+
+    if (product.repositionBulks !== undefined || product.repositionUnits !== undefined) {
+      currentBulks = product.repositionBulks ?? 0;
+      currentUnits = product.repositionUnits ?? 0;
+    } else {
+      const repList = ShoppingService.getReplenishmentList();
+      const existingRep = repList.find((it) => it.productId === productId);
+      if (existingRep && (existingRep.bulksPending !== undefined || existingRep.unitsPending !== undefined)) {
+        currentBulks = existingRep.bulksPending ?? 0;
+        currentUnits = existingRep.unitsPending ?? 0;
+      } else if (product.isPendingReposition && product.repositionQuantity) {
+        currentUnits = product.repositionQuantity;
+      }
+    }
+
+    // REQUIREMENT 2 & 4: STRICT SEPARATION OF BULK VS UNIT IMPACT
+    // If employee scans in "Modo: 1 Bulto", increment ONLY bulks
+    // If employee scans in "Modo: 1 Unidad", increment ONLY units
+    if (mode === 'bulk') {
+      currentBulks = Math.max(0, currentBulks + amount);
+    } else {
+      currentUnits = Math.max(0, currentUnits + amount);
+    }
+
+    // Calculate total net units mathematically
+    const totalUnits = (currentBulks * unitsPerBulk) + currentUnits;
+
+    product.isPendingReposition = true;
+    product.repositionBulks = currentBulks;
+    product.repositionUnits = currentUnits;
+    product.repositionQuantity = totalUnits;
+    product.repositionNotes =
+      notes ||
+      product.repositionNotes ||
+      `Pendiente: ${currentBulks} bultos y ${currentUnits} unidades (= ${totalUnits} uds)`;
+    product.repositionAddedAt = new Date().toISOString();
+
+    this.saveProducts(products);
+
+    // Synchronize with ShoppingService
+    ShoppingService.setReplenishmentBreakdown(productId, currentBulks, currentUnits, unitsPerBulk, product.repositionNotes);
+
+    if (lpIndex >= 0) {
+      localPending[lpIndex].isPendingReposition = true;
+      localPending[lpIndex].repositionBulks = currentBulks;
+      localPending[lpIndex].repositionUnits = currentUnits;
+      localPending[lpIndex].repositionQuantity = totalUnits;
+      localPending[lpIndex].repositionNotes = product.repositionNotes;
+      localPending[lpIndex].repositionAddedAt = product.repositionAddedAt;
+      this.saveLocalPendingProducts(localPending);
+    }
+
+    // Notify listeners so views and badge counters update in real time
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('reposition_updated', {
+          detail: {
+            productId,
+            isPending: true,
+            product: { ...product },
+            bulksPending: currentBulks,
+            unitsPending: currentUnits,
+            totalUnits,
+          },
+        })
+      );
+    }
+
+    return { product: { ...product }, bulksPending: currentBulks, unitsPending: currentUnits, totalUnits };
+  },
+
+  updateProductRepositionBreakdown(
+    productId: string,
+    bulksPending: number,
+    unitsPending: number
+  ): Product | null {
+    const products = this.getProducts();
+    const product = products.find((p) => p.id === productId);
+    if (!product) return null;
+
+    const unitsPerBulk = Math.max(1, product.unitsPerBulk || 12);
+    const safeBulks = Math.max(0, Math.floor(bulksPending));
+    const safeUnits = Math.max(0, Math.floor(unitsPending));
+    const totalUnits = (safeBulks * unitsPerBulk) + safeUnits;
+
+    product.repositionBulks = safeBulks;
+    product.repositionUnits = safeUnits;
+    product.repositionQuantity = totalUnits;
+    product.isPendingReposition = totalUnits > 0;
+    product.repositionNotes = `Pendiente: ${safeBulks} bultos y ${safeUnits} unidades (= ${totalUnits} uds)`;
+
+    this.saveProducts(products);
+
+    ShoppingService.setReplenishmentBreakdown(productId, safeBulks, safeUnits, unitsPerBulk);
+
+    const localPending = this.getLocalPendingProducts();
+    const lpIndex = localPending.findIndex((p) => p.id === productId);
+    if (lpIndex >= 0) {
+      localPending[lpIndex].isPendingReposition = product.isPendingReposition;
+      localPending[lpIndex].repositionBulks = safeBulks;
+      localPending[lpIndex].repositionUnits = safeUnits;
+      localPending[lpIndex].repositionQuantity = totalUnits;
+      localPending[lpIndex].repositionNotes = product.repositionNotes;
+      this.saveLocalPendingProducts(localPending);
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('reposition_updated', {
+          detail: {
+            productId,
+            isPending: product.isPendingReposition,
+            product: { ...product },
+            bulksPending: safeBulks,
+            unitsPending: safeUnits,
+            totalUnits,
+          },
+        })
+      );
+    }
+
+    return { ...product };
+  },
+
+  updateProductRepositionQuantity(productId: string, quantity: number): Product | null {
+    const products = this.getProducts();
+    const product = products.find((p) => p.id === productId);
+    if (!product) return null;
+
+    product.repositionQuantity = Math.max(0, quantity);
+    if (quantity > 0) {
+      product.isPendingReposition = true;
+    }
+    this.saveProducts(products);
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('reposition_updated', {
+          detail: { productId, isPending: product.isPendingReposition, product },
+        })
+      );
+    }
+    return product;
+  },
+
   // Requirement 1 & 2: Toggle or set product reposition state and persist directly in database
-  toggleProductReposition(productId: string, isPending?: boolean, notes?: string, quantity?: number): Product | null {
+  toggleProductReposition(
+    productId: string,
+    isPending?: boolean,
+    notes?: string,
+    quantity?: number,
+    bulks?: number,
+    units?: number
+  ): Product | null {
     const products = this.getProducts();
     let product = products.find((p) => p.id === productId);
 
@@ -253,14 +430,36 @@ export const StorageService = {
 
     const newStatus = isPending !== undefined ? Boolean(isPending) : !product.isPendingReposition;
     product.isPendingReposition = newStatus;
+    const unitsPerBulk = Math.max(1, product.unitsPerBulk || 12);
 
     if (newStatus) {
       product.repositionNotes = notes || product.notes || 'Reponer en góndola';
-      if (quantity && quantity > 0) product.repositionQuantity = quantity;
+      if (bulks !== undefined || units !== undefined) {
+        product.repositionBulks = Math.max(0, Math.floor(bulks ?? 0));
+        product.repositionUnits = Math.max(0, Math.floor(units ?? 0));
+        product.repositionQuantity = (product.repositionBulks * unitsPerBulk) + product.repositionUnits;
+      } else if (quantity && quantity > 0) {
+        product.repositionQuantity = quantity;
+        product.repositionBulks = unitsPerBulk > 1 ? Math.floor(quantity / unitsPerBulk) : 0;
+        product.repositionUnits = unitsPerBulk > 1 ? quantity % unitsPerBulk : quantity;
+      } else {
+        product.repositionBulks = product.repositionBulks ?? 0;
+        product.repositionUnits = product.repositionUnits ?? 0;
+        product.repositionQuantity = (product.repositionBulks * unitsPerBulk) + product.repositionUnits;
+      }
       product.repositionAddedAt = new Date().toISOString();
-      ShoppingService.addToReplenishmentList(productId, product.repositionNotes, product.repositionQuantity);
+      ShoppingService.setReplenishmentBreakdown(
+        productId,
+        product.repositionBulks,
+        product.repositionUnits,
+        unitsPerBulk,
+        product.repositionNotes
+      );
     } else {
       product.repositionAddedAt = undefined;
+      product.repositionBulks = 0;
+      product.repositionUnits = 0;
+      product.repositionQuantity = 0;
       ShoppingService.removeFromReplenishmentList(productId);
     }
 
@@ -271,9 +470,14 @@ export const StorageService = {
       if (newStatus) {
         localPending[lpIndex].repositionNotes = product.repositionNotes;
         localPending[lpIndex].repositionQuantity = product.repositionQuantity;
+        localPending[lpIndex].repositionBulks = product.repositionBulks;
+        localPending[lpIndex].repositionUnits = product.repositionUnits;
         localPending[lpIndex].repositionAddedAt = product.repositionAddedAt;
       } else {
         localPending[lpIndex].repositionAddedAt = undefined;
+        localPending[lpIndex].repositionBulks = 0;
+        localPending[lpIndex].repositionUnits = 0;
+        localPending[lpIndex].repositionQuantity = 0;
       }
       this.saveLocalPendingProducts(localPending);
     }
@@ -282,7 +486,14 @@ export const StorageService = {
     if (typeof window !== 'undefined') {
       window.dispatchEvent(
         new CustomEvent('reposition_updated', {
-          detail: { productId, isPending: newStatus, product },
+          detail: {
+            productId,
+            isPending: newStatus,
+            product: { ...product },
+            bulksPending: product.repositionBulks ?? 0,
+            unitsPending: product.repositionUnits ?? 0,
+            totalUnits: product.repositionQuantity ?? 0,
+          },
         })
       );
     }

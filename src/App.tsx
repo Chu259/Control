@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { StorageService } from './services/storage';
+import { ShoppingService } from './services/shoppingService';
 import {
   Product,
   StockMovement,
@@ -141,8 +142,36 @@ export default function App() {
   // Low stock counter (Dual alert: unidad o bulto por debajo del mínimo)
   const lowStockCount = products.filter((p) => checkStockAlert(p, settings.defaultMinStock).isLow).length;
 
-  // Requirement 1, 2 & 3: Real-time reposition pending count reflecting isPendingReposition = true
-  const repositionPendingCount = products.filter((p) => p.isPendingReposition === true).length;
+  // Requirement 1, 2, 3 & 4: Real-time reposition pending count reflecting the accumulated total
+  const repList = ShoppingService.getReplenishmentList();
+  const repItemsMap = new Map(repList.map((it) => [it.productId, it]));
+
+  const repositionPendingTotal = products.reduce((acc, p) => {
+    const repItem = repItemsMap.get(p.id);
+    const isPending = p.isPendingReposition === true || (repItem && repItem.status === 'pending');
+    if (!isPending) return acc;
+
+    const unitsPerBulk = Math.max(1, p.unitsPerBulk || 12);
+    let bulks = 0;
+    let units = 0;
+    if (p.repositionBulks !== undefined || p.repositionUnits !== undefined) {
+      bulks = Math.max(0, p.repositionBulks ?? 0);
+      units = Math.max(0, p.repositionUnits ?? 0);
+    } else if (repItem?.bulksPending !== undefined || repItem?.unitsPending !== undefined) {
+      bulks = Math.max(0, repItem?.bulksPending ?? 0);
+      units = Math.max(0, repItem?.unitsPending ?? 0);
+    }
+
+    const netTotal = (bulks * unitsPerBulk) + units;
+    if (netTotal > 0) return acc + netTotal;
+
+    const qty =
+      (p.repositionQuantity && p.repositionQuantity > 0 ? p.repositionQuantity : null) ??
+      (repItem?.quantityToAdd && repItem.quantityToAdd > 0 ? repItem.quantityToAdd : null) ??
+      (repItem?.suggestedUnits && repItem.suggestedUnits > 0 ? repItem.suggestedUnits : null) ??
+      1;
+    return acc + qty;
+  }, 0);
 
   // New products added by other users (pending admin review)
   const newProductsFromUsers = products.filter((p) => p.isNewFromUser && !p.reviewedByAdmin);
@@ -152,9 +181,15 @@ export default function App() {
     const handleRepositionUpdate = (e: any) => {
       const updatedProd = e.detail?.product as Product | undefined;
       if (updatedProd) {
-        setProducts((prev) =>
-          prev.map((p) => (p.id === updatedProd.id ? { ...p, ...updatedProd } : p))
-        );
+        setProducts((prev) => {
+          const idx = prev.findIndex((p) => p.id === updatedProd.id);
+          if (idx >= 0) {
+            const copy = [...prev];
+            copy[idx] = { ...copy[idx], ...updatedProd };
+            return copy;
+          }
+          return [updatedProd, ...prev];
+        });
         if (detailProduct && detailProduct.id === updatedProd.id) {
           setDetailProduct((prev) => (prev ? { ...prev, ...updatedProd } : null));
         }
@@ -738,7 +773,7 @@ export default function App() {
           currentTab={currentTab}
           onTabChange={setCurrentTab}
           lowStockCount={lowStockCount}
-          repositionCount={repositionPendingCount}
+          repositionCount={repositionPendingTotal}
           onLogout={handleLogout}
           onOpenScanner={() => {
             setScanTarget(null);

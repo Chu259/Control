@@ -293,27 +293,28 @@ export const DummiesBurstScannerView: React.FC<DummiesBurstScannerViewProps> = (
     const unitsToAdd = formatMode === 'bulk' ? unitsPerBulk : 1;
 
     if (destination === 'replenishment') {
-      // REQUIREMENT 3: MODO REPOSICIÓN
-      // Add units as pending in replenishment list
-      const currentPendingQty = product.repositionQuantity || 0;
-      const newRepositionQty = currentPendingQty + unitsToAdd;
-
-      StorageService.toggleProductReposition(
+      // REQUIREMENT 1 & 2: MODO REPOSICIÓN - SEPARACIÓN ESTRICTA BULTOS VS UNIDADES
+      const isBulkScan = formatMode === 'bulk';
+      const result = StorageService.accumulateProductReposition(
         product.id,
-        true,
-        formatMode === 'bulk' ? `Ráfaga: 1 Bulto (${unitsToAdd} uds)` : 'Ráfaga: 1 Unidad suelta',
-        newRepositionQty
+        isBulkScan ? 'bulk' : 'unit',
+        1,
+        isBulkScan ? 'Ráfaga: +1 Bulto' : 'Ráfaga: +1 Unidad suelta'
       );
+
+      const bulks = result ? result.bulksPending : (isBulkScan ? 1 : 0);
+      const units = result ? result.unitsPending : (isBulkScan ? 0 : 1);
+      const totalUnits = result ? result.totalUnits : (isBulkScan ? unitsPerBulk : 1);
 
       setLastFeedback({
         type: 'success',
         title: product.name,
-        subtitle: `Sumado a Reposición (Pendientes: ${newRepositionQty} uds)`,
-        unitsBadge: formatMode === 'bulk' ? `+${unitsToAdd} uds (1 Bulto)` : `+1 ud (Suelta)`,
-        product,
+        subtitle: `Pendiente: ${bulks} ${bulks === 1 ? 'Bulto' : 'Bultos'} y ${units} ${units === 1 ? 'Unidad' : 'Unidades'} (= ${totalUnits} uds totales)`,
+        unitsBadge: isBulkScan ? `+1 Bulto (${unitsPerBulk}u)` : `+1 Ud suelta`,
+        product: result?.product || product,
       });
     } else {
-      // REQUIREMENT 3: MODO COMPRAS / INGRESO
+      // REQUIREMENT 1 & 2: MODO COMPRAS / INGRESO - SUMA ACUMULATIVA
       // Register directly as stock entry
       StorageService.recordStockMovement({
         productId: product.id,
@@ -325,11 +326,11 @@ export const DummiesBurstScannerView: React.FC<DummiesBurstScannerViewProps> = (
         barcodeScanned: cleanCode,
       });
 
-      // Also ensure it is present in shopping list tracking
-      ShoppingService.addToShoppingList(
+      // Accumulate in shopping list
+      const shopResult = ShoppingService.accumulateShoppingItem(
         product.id,
-        formatMode === 'bulk' ? `Ingreso Ráfaga x${unitsToAdd}` : 'Ingreso Ráfaga x1 ud',
-        String(unitsToAdd)
+        unitsToAdd,
+        formatMode === 'bulk' ? `Ingreso Ráfaga x${unitsToAdd}` : 'Ingreso Ráfaga x1 ud'
       );
 
       const updatedProd = StorageService.getProducts().find((p) => p.id === product.id);
@@ -337,7 +338,7 @@ export const DummiesBurstScannerView: React.FC<DummiesBurstScannerViewProps> = (
       setLastFeedback({
         type: 'success',
         title: product.name,
-        subtitle: `Ingreso registrado en Stock (Total físico: ${updatedProd?.stock ?? product.stock + unitsToAdd} uds)`,
+        subtitle: `Ingreso en Stock (+${unitsToAdd} uds, Total: ${updatedProd?.stock ?? product.stock + unitsToAdd} uds • Compras: ${shopResult.totalUnits} uds)`,
         unitsBadge: formatMode === 'bulk' ? `+${unitsToAdd} uds (1 Bulto)` : `+1 ud (Suelta)`,
         product: updatedProd || product,
       });

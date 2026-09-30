@@ -22,7 +22,9 @@ export interface Product {
   lastUpdated: string;
   // Reposition status
   isPendingReposition?: boolean;
-  repositionQuantity?: number;
+  repositionQuantity?: number; // Total net physical units
+  repositionBulks?: number; // Independent counter: Bultos pendientes
+  repositionUnits?: number; // Independent counter: Unidades sueltas pendientes
   repositionNotes?: string;
   repositionAddedAt?: string;
   // Multi-device sync tracking
@@ -49,6 +51,8 @@ export interface ReplenishmentItem {
   suggestedUnits?: number;
   quantityToAdd?: number;
   unitMode?: 'unit' | 'bulk'; // Discriminar si se repone por unidades o bultos
+  bulksPending?: number; // Independent counter: Bultos pendientes
+  unitsPending?: number; // Independent counter: Unidades sueltas pendientes
   locationNotes?: string;
   addedAt: string;
 }

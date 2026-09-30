@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import {
   ShoppingCart,
-  Download,
   Plus,
   Trash2,
   Barcode,
@@ -15,11 +14,13 @@ import {
   RefreshCw,
   X,
   Eye,
+  Share2,
 } from 'lucide-react';
 import { Product, StoreSettings, ShoppingListItem } from '../types';
 import { ShoppingService } from '../services/shoppingService';
 import { checkStockAlert } from '../utils/stockAlert';
 import { matchProductTokens } from '../utils/searchMatcher';
+import { shareBase64Image } from '../utils/nativeShare';
 
 interface ShoppingListViewProps {
   products: Product[];
@@ -38,6 +39,7 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
 }) => {
   const [items, setItems] = useState<ShoppingListItem[]>([]);
   const [isExporting, setIsExporting] = useState(false);
+  const [isSharing, setIsSharing] = useState(false);
   const [exportedImageUrl, setExportedImageUrl] = useState<string | null>(null);
   const [searchFilter, setSearchFilter] = useState('');
   const [addProductModalOpen, setAddProductModalOpen] = useState(false);
@@ -134,7 +136,31 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
     }
   };
 
-  // Export to JPG with product images, dual barcodes and empty handwriting boxes
+  // Share JPG directly via Capacitor Native Share plugin (@capacitor/share)
+  const handleShareExportedImage = async (customUrl?: string) => {
+    const imageUrl = customUrl || exportedImageUrl;
+    if (!imageUrl) return;
+
+    setIsSharing(true);
+    try {
+      const fileName = `lista_compras_${new Date().toISOString().slice(0, 10)}.jpg`;
+      await shareBase64Image(imageUrl, {
+        fileName,
+        title: `Lista de Compras - ${settings.storeName || 'depos'}`,
+        text: `Lista de compras y abastecimiento de mercadería con códigos de barra (${populatedItems.length} artículos).`,
+        dialogTitle: 'Compartir Lista JPG por WhatsApp, Gmail o Guardar',
+      });
+      setExportMessage('Menú nativo de compartir activado');
+      setTimeout(() => setExportMessage(null), 3500);
+    } catch (err) {
+      console.error('Error al compartir JPG:', err);
+      alert('No se pudo abrir el menú nativo de compartir.');
+    } finally {
+      setIsSharing(false);
+    }
+  };
+
+  // Export to JPG with product images, dual barcodes and empty handwriting boxes, then trigger native Share
   const handleExportJPG = async () => {
     if (populatedItems.length === 0) {
       alert('Agrega al menos un producto a la lista de compras antes de exportar.');
@@ -150,8 +176,10 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
         settings.storeName
       );
       setExportedImageUrl(jpgUrl);
-      setExportMessage('¡Lista de compras descargada con éxito en formato JPG!');
-      setTimeout(() => setExportMessage(null), 4000);
+      setExportMessage('¡Lista de compras generada con éxito!');
+      
+      // Automatically prompt native Android share menu
+      await handleShareExportedImage(jpgUrl);
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Error al exportar a formato JPG');
       setExportMessage(null);
@@ -177,16 +205,16 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
                 </span>
               </h2>
               <p className="text-xs text-zinc-400">
-                Exporta en imagen JPG con fotos, códigos y recuadro vacío para anotar a mano
+                Exporta y comparte en formato JPG con fotos, códigos y recuadro para anotar a mano
               </p>
             </div>
           </div>
 
-          {/* Export JPG Button */}
+          {/* Export & Share JPG Button */}
           <button
             id="export-shopping-jpg-btn"
             onClick={handleExportJPG}
-            disabled={isExporting || populatedItems.length === 0}
+            disabled={isExporting || isSharing || populatedItems.length === 0}
             className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 disabled:opacity-40 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-sky-500/20 transition-all active:scale-95"
           >
             {isExporting ? (
@@ -194,10 +222,15 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
                 <RefreshCw className="w-4 h-4 animate-spin" />
                 <span>Generando JPG...</span>
               </>
+            ) : isSharing ? (
+              <>
+                <RefreshCw className="w-4 h-4 animate-spin" />
+                <span>Abriendo Menú...</span>
+              </>
             ) : (
               <>
-                <Download className="w-4 h-4" />
-                <span>Descargar en Formato JPG</span>
+                <Share2 className="w-4 h-4" />
+                <span>Compartir Lista JPG</span>
               </>
             )}
           </button>
@@ -586,7 +619,7 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
                 <FileImage className="w-5 h-5 text-sky-400" />
                 <div>
                   <h3 className="text-sm font-bold text-white">Vista Previa de la Lista JPG Generada</h3>
-                  <p className="text-[11px] text-zinc-400">El archivo .jpg se ha descargado a tu dispositivo</p>
+                  <p className="text-[11px] text-zinc-400">Envía la imagen directamente por WhatsApp, Gmail o guárdala en tu teléfono</p>
                 </div>
               </div>
               <button
@@ -605,18 +638,29 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
               />
             </div>
 
-            <div className="p-3 border-t border-white/10 bg-[#12141c] flex items-center justify-between">
-              <span className="text-xs text-zinc-400">
+            <div className="p-3 border-t border-white/10 bg-[#12141c] flex items-center justify-between gap-3">
+              <span className="text-xs text-zinc-400 hidden sm:inline">
                 Formato JPG con fotos, códigos y recuadros manuales
               </span>
-              <a
-                href={exportedImageUrl}
-                download={`lista_compras_${new Date().toISOString().slice(0, 10)}.jpg`}
-                className="px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-600 text-white font-bold text-xs flex items-center gap-1.5"
+              <button
+                type="button"
+                id="btn-share-shopping-jpg-modal"
+                onClick={() => handleShareExportedImage(exportedImageUrl)}
+                disabled={isSharing}
+                className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-sky-500/25 active:scale-95 transition-all ml-auto"
               >
-                <Download className="w-4 h-4" />
-                <span>Volver a Descargar JPG</span>
-              </a>
+                {isSharing ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <span>Compartiendo...</span>
+                  </>
+                ) : (
+                  <>
+                    <Share2 className="w-4 h-4" />
+                    <span>Compartir Lista JPG</span>
+                  </>
+                )}
+              </button>
             </div>
           </div>
         </div>

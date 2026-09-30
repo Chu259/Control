@@ -252,8 +252,8 @@ export const NavigationMenu: React.FC<NavigationMenuProps> = ({
                     }`}
                   />
                   {tab.badge !== undefined && tab.badge > 0 && (
-                    <span className="absolute -top-1.5 -right-2 min-w-[14px] h-[14px] px-0.5 rounded-full bg-rose-500 text-white text-[8.5px] font-extrabold flex items-center justify-center shadow">
-                      {tab.badge}
+                    <span className="absolute -top-1.5 -right-2.5 min-w-[15px] h-[15px] px-1 rounded-full bg-rose-500 text-white text-[8px] font-extrabold flex items-center justify-center shadow">
+                      {tab.badge > 999 ? '999+' : tab.badge}
                     </span>
                   )}
                 </div>

@@ -72,20 +72,233 @@ export const ShoppingService = {
     localStorage.setItem(REPLENISHMENT_STORAGE_KEY, JSON.stringify(items));
   },
 
-  addToReplenishmentList(productId: string, locationNotes?: string, suggestedUnits?: number): ReplenishmentItem[] {
+  addToReplenishmentList(
+    productId: string,
+    locationNotes?: string,
+    suggestedUnits?: number,
+    bulks?: number,
+    units?: number,
+    unitsPerBulk: number = 12
+  ): ReplenishmentItem[] {
     const list = this.getReplenishmentList();
-    if (!list.some((item) => item.productId === productId)) {
+    const existing = list.find((item) => item.productId === productId);
+    const safeBulks = bulks !== undefined ? Math.max(0, Math.floor(bulks)) : 0;
+    const safeUnits = units !== undefined ? Math.max(0, Math.floor(units)) : (suggestedUnits ?? 0);
+    const totalUnits = (safeBulks * unitsPerBulk) + safeUnits;
+
+    if (!existing) {
       list.push({
         id: `rep-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         productId,
         status: 'pending',
         locationNotes,
-        suggestedUnits,
+        bulksPending: safeBulks,
+        unitsPending: safeUnits,
+        suggestedUnits: totalUnits,
+        quantityToAdd: totalUnits,
         addedAt: new Date().toISOString(),
       });
-      this.saveReplenishmentList(list);
+    } else {
+      existing.status = 'pending';
+      if (bulks !== undefined || units !== undefined) {
+        existing.bulksPending = safeBulks;
+        existing.unitsPending = safeUnits;
+        existing.suggestedUnits = totalUnits;
+        existing.quantityToAdd = totalUnits;
+      } else if (suggestedUnits !== undefined && suggestedUnits > 0) {
+        existing.suggestedUnits = suggestedUnits;
+        existing.quantityToAdd = suggestedUnits;
+        existing.unitsPending = suggestedUnits;
+      }
+      if (locationNotes) {
+        existing.locationNotes = locationNotes;
+      }
     }
+    this.saveReplenishmentList(list);
     return list;
+  },
+
+  // Set explicit independent breakdown of Bultos and Unidades Sueltas
+  setReplenishmentBreakdown(
+    productId: string,
+    bulksPending: number,
+    unitsPending: number,
+    unitsPerBulk: number = 12,
+    locationNotes?: string
+  ): ReplenishmentItem {
+    const list = this.getReplenishmentList();
+    const existingIndex = list.findIndex((item) => item.productId === productId);
+    const safeBulks = Math.max(0, Math.floor(bulksPending));
+    const safeUnits = Math.max(0, Math.floor(unitsPending));
+    const totalUnits = (safeBulks * unitsPerBulk) + safeUnits;
+
+    let targetItem: ReplenishmentItem;
+    if (existingIndex >= 0) {
+      targetItem = {
+        ...list[existingIndex],
+        status: 'pending',
+        bulksPending: safeBulks,
+        unitsPending: safeUnits,
+        suggestedUnits: totalUnits,
+        quantityToAdd: totalUnits,
+        locationNotes: locationNotes || list[existingIndex].locationNotes || 'Ráfaga Dummies',
+      };
+      list[existingIndex] = targetItem;
+    } else {
+      targetItem = {
+        id: `rep-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        productId,
+        status: 'pending',
+        locationNotes: locationNotes || 'Ráfaga Dummies',
+        bulksPending: safeBulks,
+        unitsPending: safeUnits,
+        suggestedUnits: totalUnits,
+        quantityToAdd: totalUnits,
+        addedAt: new Date().toISOString(),
+      };
+      list.push(targetItem);
+    }
+    this.saveReplenishmentList(list);
+    return targetItem;
+  },
+
+  // Cumulative addition for Ráfaga Dummies: updates Bultos and Unidades Sueltas independently
+  accumulateReplenishment(
+    productId: string,
+    mode: 'bulk' | 'unit',
+    amount: number = 1,
+    locationNotes?: string,
+    unitsPerBulk: number = 12
+  ): {
+    list: ReplenishmentItem[];
+    item: ReplenishmentItem;
+    bulksPending: number;
+    unitsPending: number;
+    totalUnits: number;
+  } {
+    const list = this.getReplenishmentList();
+    const existingIndex = list.findIndex((item) => item.productId === productId);
+    let bulksPending = 0;
+    let unitsPending = 0;
+    let targetItem: ReplenishmentItem;
+
+    if (existingIndex >= 0) {
+      const existing = list[existingIndex];
+      bulksPending = existing.bulksPending ?? 0;
+      unitsPending = existing.unitsPending ?? 0;
+
+      if (mode === 'bulk') {
+        bulksPending = Math.max(0, bulksPending + amount);
+      } else {
+        unitsPending = Math.max(0, unitsPending + amount);
+      }
+
+      const totalUnits = (bulksPending * unitsPerBulk) + unitsPending;
+
+      targetItem = {
+        ...existing,
+        status: 'pending',
+        bulksPending,
+        unitsPending,
+        suggestedUnits: totalUnits,
+        quantityToAdd: totalUnits,
+        locationNotes: locationNotes || existing.locationNotes || 'Ráfaga Dummies',
+      };
+      list[existingIndex] = targetItem;
+    } else {
+      if (mode === 'bulk') {
+        bulksPending = Math.max(0, amount);
+      } else {
+        unitsPending = Math.max(0, amount);
+      }
+      const totalUnits = (bulksPending * unitsPerBulk) + unitsPending;
+
+      targetItem = {
+        id: `rep-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        productId,
+        status: 'pending',
+        locationNotes: locationNotes || 'Ráfaga Dummies',
+        bulksPending,
+        unitsPending,
+        suggestedUnits: totalUnits,
+        quantityToAdd: totalUnits,
+        addedAt: new Date().toISOString(),
+      };
+      list.push(targetItem);
+    }
+
+    this.saveReplenishmentList(list);
+    return {
+      list,
+      item: targetItem,
+      bulksPending,
+      unitsPending,
+      totalUnits: (bulksPending * unitsPerBulk) + unitsPending,
+    };
+  },
+
+  // Updates independent counters for Bultos and Unidades Sueltas directly
+  updateReplenishmentBreakdown(
+    productId: string,
+    bulksPending: number,
+    unitsPending: number,
+    unitsPerBulk: number = 12
+  ): ReplenishmentItem[] {
+    const list = this.getReplenishmentList().map((item) => {
+      if (item.productId === productId) {
+        const safeBulks = Math.max(0, Math.floor(bulksPending));
+        const safeUnits = Math.max(0, Math.floor(unitsPending));
+        const totalUnits = (safeBulks * unitsPerBulk) + safeUnits;
+        return {
+          ...item,
+          bulksPending: safeBulks,
+          unitsPending: safeUnits,
+          suggestedUnits: totalUnits,
+          quantityToAdd: totalUnits,
+        };
+      }
+      return item;
+    });
+    this.saveReplenishmentList(list);
+    return list;
+  },
+
+  // Cumulative addition for Shopping list in Ráfaga
+  accumulateShoppingItem(
+    productId: string,
+    unitsToAdd: number,
+    customNotes?: string
+  ): { list: ShoppingListItem[]; item: ShoppingListItem; totalUnits: number; previousUnits: number } {
+    const list = this.getShoppingList();
+    const existingIndex = list.findIndex((item) => item.productId === productId);
+    let totalUnits = unitsToAdd;
+    let previousUnits = 0;
+    let targetItem: ShoppingListItem;
+
+    if (existingIndex >= 0) {
+      const existing = list[existingIndex];
+      const match = (existing.targetQuantity || '').match(/\d+/);
+      previousUnits = match ? parseInt(match[0], 10) : 0;
+      totalUnits = previousUnits + unitsToAdd;
+      targetItem = {
+        ...existing,
+        targetQuantity: `${totalUnits} uds`,
+        customNotes: customNotes || existing.customNotes || 'Ingreso Ráfaga',
+      };
+      list[existingIndex] = targetItem;
+    } else {
+      targetItem = {
+        id: `shop-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        productId,
+        targetQuantity: `${unitsToAdd} uds`,
+        customNotes: customNotes || 'Ingreso Ráfaga',
+        addedAt: new Date().toISOString(),
+      };
+      list.push(targetItem);
+    }
+
+    this.saveShoppingList(list);
+    return { list, item: targetItem, totalUnits, previousUnits };
   },
 
   toggleReplenishmentStatus(productId: string): ReplenishmentItem[] {
@@ -417,16 +630,6 @@ export const ShoppingService = {
 
     // Convert canvas to JPG
     const jpgDataUrl = canvas.toDataURL('image/jpeg', 0.94);
-
-    // Automatically trigger download
-    const cleanStore = (storeName || 'tienda').toLowerCase().replace(/[^a-z0-9]/g, '_');
-    const fileName = `lista_compras_${cleanStore}_${new Date().toISOString().slice(0, 10)}.jpg`;
-
-    const downloadLink = document.createElement('a');
-    downloadLink.href = jpgDataUrl;
-    downloadLink.download = fileName;
-    downloadLink.click();
-
     return jpgDataUrl;
   },
 

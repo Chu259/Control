@@ -68,8 +68,9 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
   // Local state for which action is selected per product: 'in' (Entrada) or 'out' (Salida)
   const [movementTypes, setMovementTypes] = useState<Record<string, 'in' | 'out'>>({});
   const [processingId, setProcessingId] = useState<string | null>(null);
-  // Local string state for quantity inputs to allow clearing (backspacing) completely and typing numbers smoothly
-  const [quantityInputValues, setQuantityInputValues] = useState<Record<string, string>>({});
+  // Local string state for Bultos and Unidades inputs to allow clearing completely and typing smoothly
+  const [bulksInputValues, setBulksInputValues] = useState<Record<string, string>>({});
+  const [unitsInputValues, setUnitsInputValues] = useState<Record<string, string>>({});
 
   const reloadList = () => {
     const list = ShoppingService.getReplenishmentList();
@@ -125,26 +126,34 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
   // Requirement 2: Add product to replenishment directly persisting isPendingReposition = true in local DB
   const handleAddProductToReposition = (product: Product) => {
     const suggested = computeSuggestedGondola(product);
+    const unitsPerBulk = Math.max(1, product.unitsPerBulk || 12);
+    const suggestedBulks = unitsPerBulk > 1 ? Math.floor(suggested / unitsPerBulk) : 0;
+    const suggestedUnits = unitsPerBulk > 1 ? suggested % unitsPerBulk : suggested;
+
     const updated = StorageService.toggleProductReposition(
       product.id,
       true,
       product.notes || 'Reponer en góndola',
-      suggested
-    );
-    ShoppingService.addToReplenishmentList(
-      product.id,
-      product.notes || 'Reponer en góndola',
-      suggested
+      suggested,
+      suggestedBulks,
+      suggestedUnits
     );
 
     setActiveProducts((prev) => {
       const idx = prev.findIndex((p) => p.id === product.id);
+      const updatedProduct: Product = {
+        ...product,
+        isPendingReposition: true,
+        repositionBulks: suggestedBulks,
+        repositionUnits: suggestedUnits,
+        repositionQuantity: suggested,
+      };
       if (idx >= 0) {
         const copy = [...prev];
-        copy[idx] = { ...copy[idx], isPendingReposition: true, repositionQuantity: suggested };
+        copy[idx] = updatedProduct;
         return copy;
       }
-      return [{ ...product, isPendingReposition: true, repositionQuantity: suggested }, ...prev];
+      return [updatedProduct, ...prev];
     });
 
     if (updated) {
@@ -153,7 +162,7 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
     }
     reloadList();
     Sound.playSuccessChime();
-    setToastMessage(`✓ ${product.name} añadido a Reposición`);
+    setToastMessage(`✓ ${product.name} añadido a Reposición (${suggestedBulks} bultos y ${suggestedUnits} unidades)`);
     setTimeout(() => setToastMessage(null), 3000);
   };
 
@@ -238,11 +247,7 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
   };
 
   // Calculates a smart suggested restock quantity for shelf/gondola
-  const computeSuggestedGondola = (product: Product, item?: ReplenishmentItem): number => {
-    if (item?.suggestedUnits && item.suggestedUnits > 0) {
-      return item.suggestedUnits;
-    }
-    // Priority: use explicit suggested quantity in gondola set on product
+  const computeSuggestedGondola = (product: Product): number => {
     if (product.suggestedGondolaQuantity && product.suggestedGondolaQuantity > 0) {
       const diff = product.suggestedGondolaQuantity - product.stock;
       return diff > 0 ? diff : product.suggestedGondolaQuantity;
@@ -254,103 +259,112 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
     return needed > 0 ? needed : Math.max(1, unitsPerBulk);
   };
 
-  // Returns user-customized quantity to add or defaults according to unitMode
-  const getQuantityToAdd = (product: Product, item: ReplenishmentItem): number => {
-    if (item.quantityToAdd !== undefined && item.quantityToAdd > 0) {
-      return item.quantityToAdd;
-    }
-    const suggestedUnits = computeSuggestedGondola(product, item);
+  // REQUIREMENT 1, 2, 3: Helper to read separate counters for Bultos and Unidades Sueltas
+  const getProductBreakdown = (product: Product, item?: ReplenishmentItem) => {
     const unitsPerBulk = Math.max(1, product.unitsPerBulk || 12);
-    if (item.unitMode === 'bulk') {
-      return Math.max(1, Math.round(suggestedUnits / unitsPerBulk));
-    }
-    return suggestedUnits;
-  };
+    let bulks = 0;
+    let units = 0;
 
-  const handleUpdateQuantityToAdd = (productId: string, qty: number) => {
-    const safeQty = Math.max(0, qty);
-    const updated = ShoppingService.updateReplenishmentQuantity(productId, safeQty);
-    setItems(updated);
-  };
-
-  const handleQuantityInputChange = (productId: string, rawVal: string) => {
-    // Only allow digits so users don't type invalid characters, but allow empty string "" for full deletion/backspace
-    const cleanVal = rawVal.replace(/[^0-9]/g, '');
-    setQuantityInputValues((prev) => ({ ...prev, [productId]: cleanVal }));
-
-    const parsed = parseInt(cleanVal, 10);
-    if (!isNaN(parsed) && parsed >= 0) {
-      handleUpdateQuantityToAdd(productId, parsed);
-    }
-  };
-
-  const handleQuantityInputBlur = (productId: string, fallbackQty: number) => {
-    const rawVal = quantityInputValues[productId];
-    if (rawVal === undefined) return;
-    const parsed = parseInt(rawVal, 10);
-    if (isNaN(parsed) || parsed < 0) {
-      const resetQty = Math.max(0, fallbackQty ?? 0);
-      handleUpdateQuantityToAdd(productId, resetQty);
+    if (product.repositionBulks !== undefined || product.repositionUnits !== undefined) {
+      bulks = Math.max(0, product.repositionBulks ?? 0);
+      units = Math.max(0, product.repositionUnits ?? 0);
+    } else if (item?.bulksPending !== undefined || item?.unitsPending !== undefined) {
+      bulks = Math.max(0, item?.bulksPending ?? 0);
+      units = Math.max(0, item?.unitsPending ?? 0);
     } else {
-      handleUpdateQuantityToAdd(productId, parsed);
-    }
-    setQuantityInputValues((prev) => {
-      const copy = { ...prev };
-      delete copy[productId];
-      return copy;
-    });
-  };
-
-  const handleStepQuantity = (productId: string, delta: number, currentQty: number) => {
-    const rawVal = quantityInputValues[productId];
-    const base = rawVal !== undefined && rawVal !== '' ? parseInt(rawVal, 10) || currentQty : currentQty;
-    const nextQty = Math.max(0, base + delta);
-    handleUpdateQuantityToAdd(productId, nextQty);
-    setQuantityInputValues((prev) => {
-      const copy = { ...prev };
-      delete copy[productId];
-      return copy;
-    });
-  };
-
-  const handleUpdateUnitMode = (productId: string, newMode: 'unit' | 'bulk', product: Product) => {
-    const unitsPerBulk = Math.max(1, product.unitsPerBulk || 12);
-    const item = items.find((i) => i.productId === productId);
-    const currentQty = item?.quantityToAdd || computeSuggestedGondola(product, item);
-
-    let convertedQty = currentQty;
-    if (newMode === 'bulk' && (!item?.unitMode || item.unitMode === 'unit')) {
-      convertedQty = Math.max(0, Math.round(currentQty / unitsPerBulk));
-    } else if (newMode === 'unit' && item?.unitMode === 'bulk') {
-      convertedQty = Math.max(0, currentQty * unitsPerBulk);
+      const legacy = product.repositionQuantity || item?.quantityToAdd || item?.suggestedUnits || 0;
+      if (legacy > 0) {
+        if (item?.unitMode === 'bulk') {
+          bulks = legacy;
+        } else {
+          units = legacy;
+        }
+      }
     }
 
-    ShoppingService.updateReplenishmentQuantity(productId, convertedQty);
-    const updated = ShoppingService.updateReplenishmentUnitMode(productId, newMode);
-    setItems(updated);
-    setQuantityInputValues((prev) => {
+    const totalUnits = (bulks * unitsPerBulk) + units;
+    return { bulks, units, totalUnits, unitsPerBulk };
+  };
+
+  // Increments or decrements ONLY Bultos Pendientes
+  const handleStepBulks = (productId: string, delta: number) => {
+    const product = activeProducts.find((p) => p.id === productId);
+    const item = allReplenishMap.get(productId)?.item;
+    if (!product) return;
+
+    const { bulks, units } = getProductBreakdown(product, item);
+    const nextBulks = Math.max(0, bulks + delta);
+    StorageService.updateProductRepositionBreakdown(productId, nextBulks, units);
+    reloadList();
+    if (onRefreshData) onRefreshData();
+  };
+
+  // Increments or decrements ONLY Unidades Sueltas Pendientes
+  const handleStepUnits = (productId: string, delta: number) => {
+    const product = activeProducts.find((p) => p.id === productId);
+    const item = allReplenishMap.get(productId)?.item;
+    if (!product) return;
+
+    const { bulks, units } = getProductBreakdown(product, item);
+    const nextUnits = Math.max(0, units + delta);
+    StorageService.updateProductRepositionBreakdown(productId, bulks, nextUnits);
+    reloadList();
+    if (onRefreshData) onRefreshData();
+  };
+
+  const handleBulksInputChange = (productId: string, val: string) => {
+    setBulksInputValues((prev) => ({ ...prev, [productId]: val }));
+  };
+
+  const handleBulksInputBlur = (productId: string, currentBulks: number, currentUnits: number) => {
+    const raw = bulksInputValues[productId];
+    if (raw === undefined) return;
+    const parsed = parseInt(raw, 10);
+    const nextBulks = isNaN(parsed) || parsed < 0 ? 0 : parsed;
+    StorageService.updateProductRepositionBreakdown(productId, nextBulks, currentUnits);
+    setBulksInputValues((prev) => {
       const copy = { ...prev };
       delete copy[productId];
       return copy;
     });
+    reloadList();
+    if (onRefreshData) onRefreshData();
+  };
+
+  const handleUnitsInputChange = (productId: string, val: string) => {
+    setUnitsInputValues((prev) => ({ ...prev, [productId]: val }));
+  };
+
+  const handleUnitsInputBlur = (productId: string, currentBulks: number, currentUnits: number) => {
+    const raw = unitsInputValues[productId];
+    if (raw === undefined) return;
+    const parsed = parseInt(raw, 10);
+    const nextUnits = isNaN(parsed) || parsed < 0 ? 0 : parsed;
+    StorageService.updateProductRepositionBreakdown(productId, currentBulks, nextUnits);
+    setUnitsInputValues((prev) => {
+      const copy = { ...prev };
+      delete copy[productId];
+      return copy;
+    });
+    reloadList();
+    if (onRefreshData) onRefreshData();
   };
 
   // Confirmation handler for inline functions directly underneath each product
   const handleConfirmInlineMovement = (product: Product, item: ReplenishmentItem) => {
     const currentType = getMovementType(product.id);
-    const unitsPerBulk = Math.max(1, product.unitsPerBulk || 12);
-    // Use whatever the user currently has in the text input if they just typed it
-    const rawVal = quantityInputValues[product.id];
-    const rawParsed = rawVal !== undefined && rawVal !== '' ? parseInt(rawVal, 10) : NaN;
-    const addQty = !isNaN(rawParsed) && rawParsed >= 1 ? rawParsed : getQuantityToAdd(product, item);
-    const isBulk = item.unitMode === 'bulk';
-    const effectiveUnits = isBulk ? addQty * unitsPerBulk : addQty;
+    const { bulks, units, totalUnits, unitsPerBulk } = getProductBreakdown(product, item);
 
-    // Optional guard for stock depletion on saída
-    if (currentType === 'out' && product.stock < effectiveUnits) {
+    if (totalUnits <= 0) {
+      alert('La cantidad a registrar debe ser al menos de 1 unidad física.');
+      return;
+    }
+
+    // Optional guard for stock depletion on salida
+    if (currentType === 'out' && product.stock < totalUnits) {
       if (
         !confirm(
-          `El stock actual (${product.stock}) es menor a la salida solicitada (${effectiveUnits}). ¿Deseas continuar?`
+          `El stock actual (${product.stock}) es menor a la salida solicitada (${totalUnits}). ¿Deseas continuar?`
         )
       ) {
         return;
@@ -363,11 +377,13 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
       const movementParams = {
         productId: product.id,
         type: currentType as MovementType,
-        quantity: effectiveUnits,
+        quantity: totalUnits,
         reason: (currentType === 'in' ? 'restock' : 'sale') as MovementReason,
-        notes: currentType === 'in' ? 'Reposición góndola directa' : 'Venta / Salida góndola directa',
-        unitType: isBulk ? ('bulk' as const) : ('unit' as const),
-        bulkQuantity: isBulk ? addQty : undefined,
+        notes: currentType === 'in'
+          ? `Reposición: ${bulks} bultos y ${units} unidades`
+          : `Salida góndola: ${bulks} bultos y ${units} unidades`,
+        unitType: (bulks > 0 && units === 0 ? 'bulk' : 'unit') as 'bulk' | 'unit',
+        bulkQuantity: bulks > 0 ? bulks : undefined,
         unitsPerBulk: unitsPerBulk,
       };
 
@@ -385,18 +401,16 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
       // Play audio feedback
       Sound.playSuccessChime();
 
-      // Automatically mark as completed in replenishment list and clear product pending flag
+      // Automatically reset counters and mark as completed
+      StorageService.updateProductRepositionBreakdown(product.id, 0, 0);
+      StorageService.toggleProductReposition(product.id, false);
       ShoppingService.setReplenishmentStatus(product.id, 'completed');
-      const updatedProduct = StorageService.toggleProductReposition(product.id, false);
-      if (updatedProduct && onUpdateProduct) {
-        onUpdateProduct(updatedProduct);
-      }
+
       reloadList();
       if (onRefreshData) onRefreshData();
 
-      const unitLabel = isBulk ? (addQty === 1 ? 'Bulto' : 'Bultos') : (product.unit || 'uds');
       setToastMessage(
-        `✓ ¡${currentType === 'in' ? 'Entrada' : 'Salida'} de ${addQty} ${unitLabel} (${effectiveUnits} uds) confirmada!`
+        `✓ ¡${currentType === 'in' ? 'Entrada' : 'Salida'} de ${bulks} bultos y ${units} unidades (= ${totalUnits} uds) confirmada!`
       );
       setTimeout(() => setToastMessage(null), 4000);
     } catch (err: any) {
@@ -416,14 +430,27 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
   activeProducts.forEach((p) => {
     if (p.isPendingReposition) {
       const existingItem = itemsMap.get(p.id);
-      const repItem: ReplenishmentItem = existingItem || {
-        id: `rep-${p.id}`,
-        productId: p.id,
-        status: 'pending',
-        locationNotes: p.repositionNotes || p.notes || 'Reponer en góndola',
-        suggestedUnits: p.repositionQuantity,
-        addedAt: p.repositionAddedAt || new Date().toISOString(),
-      };
+      const repItem: ReplenishmentItem = existingItem
+        ? {
+            ...existingItem,
+            status: 'pending',
+            bulksPending: p.repositionBulks ?? existingItem.bulksPending ?? 0,
+            unitsPending: p.repositionUnits ?? existingItem.unitsPending ?? 0,
+            suggestedUnits: p.repositionQuantity || existingItem.suggestedUnits,
+            quantityToAdd: p.repositionQuantity || existingItem.quantityToAdd || existingItem.suggestedUnits,
+            locationNotes: p.repositionNotes || existingItem.locationNotes || 'Reponer en góndola',
+          }
+        : {
+            id: `rep-${p.id}`,
+            productId: p.id,
+            status: 'pending',
+            locationNotes: p.repositionNotes || p.notes || 'Reponer en góndola',
+            bulksPending: p.repositionBulks ?? 0,
+            unitsPending: p.repositionUnits ?? 0,
+            suggestedUnits: p.repositionQuantity,
+            quantityToAdd: p.repositionQuantity,
+            addedAt: p.repositionAddedAt || new Date().toISOString(),
+          };
       allReplenishMap.set(p.id, { item: repItem, product: p });
     }
   });
@@ -467,7 +494,18 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
     lowStockProducts.forEach((p) => {
       if (!p.isPendingReposition) {
         const suggested = computeSuggestedGondola(p);
-        const updated = StorageService.toggleProductReposition(p.id, true, p.notes || 'Reponer en góndola', suggested);
+        const unitsPerBulk = Math.max(1, p.unitsPerBulk || 12);
+        const suggestedBulks = unitsPerBulk > 1 ? Math.floor(suggested / unitsPerBulk) : 0;
+        const suggestedUnits = unitsPerBulk > 1 ? suggested % unitsPerBulk : suggested;
+
+        const updated = StorageService.toggleProductReposition(
+          p.id,
+          true,
+          p.notes || 'Reponer en góndola',
+          suggested,
+          suggestedBulks,
+          suggestedUnits
+        );
         if (updated && onUpdateProduct) {
           onUpdateProduct(updated);
         }
@@ -674,20 +712,12 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
       ) : (
         <div className="space-y-3">
           {filteredItems.map(({ item, product }) => {
-            const unitsPerBulk = Math.max(1, product.unitsPerBulk || 12);
+            const { bulks, units, totalUnits, unitsPerBulk } = getProductBreakdown(product, item);
             const bulkUnitName = product.bulkUnitName || `Caja x${unitsPerBulk}`;
             const alertStatus = checkStockAlert(product);
             const isCompleted = item.status === 'completed';
-            const suggestedGondola = computeSuggestedGondola(product, item);
-            const currentAddQty = getQuantityToAdd(product, item);
-            const isBulk = item.unitMode === 'bulk';
-            const effectiveUnits = isBulk ? currentAddQty * unitsPerBulk : currentAddQty;
+            const suggestedGondola = computeSuggestedGondola(product);
             const currentType = getMovementType(product.id);
-
-            const displayQtyText = isBulk
-              ? `${currentAddQty} ${currentAddQty === 1 ? (product.bulkUnitName || 'Bulto') : (product.bulkUnitName || 'Bultos')} = ${effectiveUnits} uds`
-              : `${currentAddQty} ${product.unit || 'uds'}`;
-
             const isHighlighted = highlightProductId === product.id;
 
             return (
@@ -702,9 +732,9 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
                     : 'border-white/10 hover:border-emerald-500/30'
                 }`}
               >
-                {/* Upper Area: Checkbox + Left Column (Image, Sugerido, Uds/Bultos, Counter) + Right Column (Info) */}
+                {/* Upper Area: Status Checkbox + Photo + Product Info */}
                 <div className="flex items-start gap-3">
-                  {/* Status Checkbox Button matching sketch: circular ring when pending, filled green check when completed */}
+                  {/* Status Checkbox Button */}
                   <button
                     type="button"
                     onClick={() => handleToggleStatus(product.id)}
@@ -718,110 +748,38 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
                     <Check className="w-4 h-4 stroke-[3]" />
                   </button>
 
-                  {/* Photo & Restock Stepper Controls */}
-                  <div className="flex flex-col items-center flex-shrink-0 w-24 sm:w-28">
-                    {/* Photo / Icon */}
-                    <div className="w-16 h-16 rounded-xl bg-white p-1 flex items-center justify-center overflow-hidden border border-white/10 shadow">
-                      {product.image ? (
-                        <img
-                          src={product.image}
-                          alt={product.name}
-                          referrerPolicy="no-referrer"
-                          className="max-h-full max-w-full object-contain"
-                        />
-                      ) : (
-                        <div className="w-full h-full bg-slate-100 flex items-center justify-center text-slate-500 font-bold text-xs">
-                          {product.name.slice(0, 2).toUpperCase()}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Sugerido góndola badge */}
-                    <div className="mt-1.5 w-full text-center bg-[#211a10] border border-amber-500/30 rounded-lg py-1 px-1">
-                      <span className="text-[9px] text-amber-300/80 font-medium block leading-none">
-                        Sugerido góndola
-                      </span>
-                      <span className="text-xs font-bold text-amber-300 font-mono leading-tight block mt-0.5">
-                        {suggestedGondola} {product.unit || 'uds'}
-                      </span>
-                    </div>
-
-                    {/* Selector de modo: Unidades vs Bultos */}
-                    <div className="mt-1.5 w-full flex flex-col items-center">
-                      <div className="flex items-center w-full bg-[#11131a] p-0.5 rounded-lg border border-white/10 mb-1">
-                        <button
-                          type="button"
-                          onClick={() => handleUpdateUnitMode(product.id, 'unit', product)}
-                          className={`flex-1 py-0.5 text-[9px] font-bold rounded transition-all ${
-                            (!item.unitMode || item.unitMode === 'unit')
-                              ? 'bg-emerald-500 text-slate-950 shadow-sm'
-                              : 'text-zinc-400 hover:text-white'
-                          }`}
-                        >
-                          Uds
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleUpdateUnitMode(product.id, 'bulk', product)}
-                          className={`flex-1 py-0.5 text-[9px] font-bold rounded transition-all ${
-                            item.unitMode === 'bulk'
-                              ? 'bg-amber-500 text-black shadow-sm'
-                              : 'text-zinc-400 hover:text-white'
-                          }`}
-                        >
-                          Bultos
-                        </button>
+                  {/* Photo / Icon */}
+                  <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-xl bg-white p-1 flex items-center justify-center overflow-hidden border border-white/10 shadow flex-shrink-0">
+                    {product.image ? (
+                      <img
+                        src={product.image}
+                        alt={product.name}
+                        referrerPolicy="no-referrer"
+                        className="max-h-full max-w-full object-contain"
+                      />
+                    ) : (
+                      <div className="w-full h-full bg-slate-100 flex items-center justify-center text-slate-500 font-bold text-xs">
+                        {product.name.slice(0, 2).toUpperCase()}
                       </div>
-
-                      {/* Stepper [-] [number] [+] */}
-                      <div className="flex items-center rounded-lg border border-emerald-500/40 bg-[#0c0e14] shadow-sm w-full justify-between overflow-hidden">
-                        <button
-                          type="button"
-                          onClick={() => handleStepQuantity(product.id, -1, currentAddQty)}
-                          className="w-7 h-6 text-zinc-300 hover:text-white hover:bg-white/10 flex items-center justify-center font-bold text-xs transition-colors select-none active:bg-white/20 cursor-pointer"
-                          title="Disminuir cantidad"
-                        >
-                          -
-                        </button>
-                        <input
-                          type="text"
-                          inputMode="numeric"
-                          pattern="[0-9]*"
-                          min="0"
-                          value={quantityInputValues[product.id] !== undefined ? quantityInputValues[product.id] : currentAddQty}
-                          onFocus={(e) => e.target.select()}
-                          onChange={(e) => handleQuantityInputChange(product.id, e.target.value)}
-                          onBlur={() => handleQuantityInputBlur(product.id, currentAddQty)}
-                          className="w-10 h-6 text-center text-xs font-bold text-emerald-300 bg-transparent focus:outline-none font-mono"
-                          title={`Cantidad de ${item.unitMode === 'bulk' ? 'bultos' : 'unidades'} a reponer`}
-                        />
-                        <button
-                          type="button"
-                          onClick={() => handleStepQuantity(product.id, 1, currentAddQty)}
-                          className="w-7 h-6 text-zinc-300 hover:text-white hover:bg-white/10 flex items-center justify-center font-bold text-xs transition-colors select-none active:bg-white/20 cursor-pointer"
-                          title="Aumentar cantidad"
-                        >
-                          +
-                        </button>
-                      </div>
-
-                      <span className="text-[8.5px] text-zinc-400 mt-0.5 text-center leading-tight">
-                        {item.unitMode === 'bulk'
-                          ? `= ${currentAddQty * unitsPerBulk} uds`
-                          : `≈ ${(currentAddQty / unitsPerBulk).toFixed(1)} bultos`}
-                      </span>
-                    </div>
+                    )}
                   </div>
 
                   {/* Right Column: Title & Details */}
                   <div className="flex-1 min-w-0">
-                    <h4
-                      className={`text-sm font-bold truncate ${
-                        isCompleted ? 'line-through text-zinc-400' : 'text-white'
-                      }`}
-                    >
-                      {product.name}
-                    </h4>
+                    <div className="flex items-start justify-between gap-1">
+                      <h4
+                        className={`text-sm font-bold truncate ${
+                          isCompleted ? 'line-through text-zinc-400' : 'text-white'
+                        }`}
+                      >
+                        {product.name}
+                      </h4>
+                      {suggestedGondola > 0 && (
+                        <span className="text-[9.5px] font-mono font-semibold px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30 flex-shrink-0">
+                          Sugerido: {suggestedGondola} uds
+                        </span>
+                      )}
+                    </div>
 
                     {/* Badges */}
                     <div className="flex items-center gap-1.5 flex-wrap mt-1">
@@ -838,7 +796,7 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
                     </div>
 
                     {/* Barcodes snippet */}
-                    <div className="space-y-0.5 text-[11px] font-mono text-zinc-300 mt-2">
+                    <div className="space-y-0.5 text-[11px] font-mono text-zinc-300 mt-1.5">
                       <div className="flex items-center gap-1">
                         <Barcode className="w-3.5 h-3.5 text-teal-400 flex-shrink-0" />
                         <span>Ud: <strong className="text-white">{product.barcodeUnit || product.barcode}</strong></span>
@@ -853,26 +811,151 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
 
                     {/* Location / notes */}
                     {(item.locationNotes || product.notes) && (
-                      <div className="flex items-center gap-1 text-[11px] text-zinc-400 mt-1.5">
+                      <div className="flex items-center gap-1 text-[11px] text-zinc-400 mt-1">
                         <MapPin className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
                         <span className="truncate">{item.locationNotes || product.notes}</span>
                       </div>
                     )}
 
                     {/* Physical stock stats */}
-                    <div className="flex items-center gap-2 text-xs text-zinc-400 mt-2 flex-wrap">
-                      <span title={`Stock total acumulado: ${product.stock} ${product.unit || 'uds'}`}>
-                        Unidades sueltas: <strong className="text-white">{unitsPerBulk > 1 ? product.stock % unitsPerBulk : product.stock} {product.unit || 'uds'}</strong>
+                    <div className="flex items-center gap-2 text-xs text-zinc-400 mt-1.5 flex-wrap">
+                      <span>
+                        En depósito: <strong className="text-amber-300">{Math.floor(product.stock / unitsPerBulk)} cj</strong>
                       </span>
                       <span>•</span>
                       <span>
-                        Bultos en depósito: <strong className="text-amber-300">{Math.floor(product.stock / unitsPerBulk)}</strong>
+                        Sueltas: <strong className="text-white">{unitsPerBulk > 1 ? product.stock % unitsPerBulk : product.stock} {product.unit || 'uds'}</strong>
+                      </span>
+                      <span>•</span>
+                      <span className="text-zinc-500">
+                        Total: {product.stock} {product.unit || 'uds'}
                       </span>
                     </div>
                   </div>
                 </div>
 
-                {/* INLINE MOVEMENT FUNCTIONS (matches the sketch Screenshot_2026-09-22-07-57-08-365.jpg) */}
+                {/* REQUIREMENT 1, 2, 3: SEPARATE INDEPENDENT COUNTERS & INFORMATIVE TOTALIZATION */}
+                <div className="mt-3 p-3 rounded-2xl bg-[#0e1118] border border-white/10 space-y-2.5">
+                  {/* Two separate side-by-side independent counter boxes */}
+                  <div className="grid grid-cols-2 gap-2">
+                    {/* CASILLERO 1: BULTOS PENDIENTES (Naranja) */}
+                    <div className="bg-[#1c1810] border border-amber-500/40 rounded-xl p-2.5 flex flex-col justify-between">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-[11px] font-extrabold text-amber-300 flex items-center gap-1.5">
+                          <span>📦</span>
+                          <span>Bultos Pendientes</span>
+                        </span>
+                        <span className="text-[9.5px] font-mono text-amber-400/80 bg-amber-500/10 px-1 rounded">
+                          x{unitsPerBulk}u
+                        </span>
+                      </div>
+                      {/* Stepper for Bultos */}
+                      <div className="flex items-center justify-between bg-black/60 border border-amber-500/40 rounded-xl overflow-hidden shadow-inner">
+                        <button
+                          type="button"
+                          onClick={() => handleStepBulks(product.id, -1)}
+                          className="w-9 h-8 text-amber-200 hover:text-white hover:bg-amber-500/25 flex items-center justify-center font-black text-base transition-colors cursor-pointer select-none active:bg-amber-500/40"
+                          title="Restar 1 bulto pendiente"
+                        >
+                          -
+                        </button>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
+                          value={bulksInputValues[product.id] !== undefined ? bulksInputValues[product.id] : bulks}
+                          onFocus={(e) => e.target.select()}
+                          onChange={(e) => handleBulksInputChange(product.id, e.target.value)}
+                          onBlur={() => handleBulksInputBlur(product.id, bulks, units)}
+                          className="w-12 h-8 text-center text-sm font-black text-amber-300 bg-transparent focus:outline-none font-mono"
+                          title="Cantidad de bultos a reponer"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleStepBulks(product.id, 1)}
+                          className="w-9 h-8 text-amber-200 hover:text-white hover:bg-amber-500/25 flex items-center justify-center font-black text-base transition-colors cursor-pointer select-none active:bg-amber-500/40"
+                          title="Sumar 1 bulto pendiente"
+                        >
+                          +
+                        </button>
+                      </div>
+                      <span className="text-[9.5px] text-amber-300/80 font-mono mt-1 text-center truncate font-semibold">
+                        = {bulks * unitsPerBulk} uds en {bulks} {bulks === 1 ? 'bulto' : 'bultos'}
+                      </span>
+                    </div>
+
+                    {/* CASILLERO 2: UNIDADES SUELTAS PENDIENTES (Verde Agua / Esmeralda) */}
+                    <div className="bg-[#0f1f1a] border border-teal-500/40 rounded-xl p-2.5 flex flex-col justify-between">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-[11px] font-extrabold text-teal-300 flex items-center gap-1.5">
+                          <span>🧴</span>
+                          <span>Unidades Sueltas</span>
+                        </span>
+                        <span className="text-[9.5px] font-mono text-teal-400/80 bg-teal-500/10 px-1 rounded">
+                          de a 1u
+                        </span>
+                      </div>
+                      {/* Stepper for Unidades */}
+                      <div className="flex items-center justify-between bg-black/60 border border-teal-500/40 rounded-xl overflow-hidden shadow-inner">
+                        <button
+                          type="button"
+                          onClick={() => handleStepUnits(product.id, -1)}
+                          className="w-9 h-8 text-teal-200 hover:text-white hover:bg-teal-500/25 flex items-center justify-center font-black text-base transition-colors cursor-pointer select-none active:bg-teal-500/40"
+                          title="Restar 1 unidad suelta pendiente"
+                        >
+                          -
+                        </button>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
+                          value={unitsInputValues[product.id] !== undefined ? unitsInputValues[product.id] : units}
+                          onFocus={(e) => e.target.select()}
+                          onChange={(e) => handleUnitsInputChange(product.id, e.target.value)}
+                          onBlur={() => handleUnitsInputBlur(product.id, bulks, units)}
+                          className="w-12 h-8 text-center text-sm font-black text-teal-300 bg-transparent focus:outline-none font-mono"
+                          title="Cantidad de unidades sueltas a reponer"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleStepUnits(product.id, 1)}
+                          className="w-9 h-8 text-teal-200 hover:text-white hover:bg-teal-500/25 flex items-center justify-center font-black text-base transition-colors cursor-pointer select-none active:bg-teal-500/40"
+                          title="Sumar 1 unidad suelta pendiente"
+                        >
+                          +
+                        </button>
+                      </div>
+                      <span className="text-[9.5px] text-teal-300/80 font-mono mt-1 text-center truncate font-semibold">
+                        = {units} {units === 1 ? 'unidad suelta' : 'unidades sueltas'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* REQUERIMIENTO 3: TOTALIZACIÓN INFORMATIVA CLARA Y DESTACADA */}
+                  <div className="p-2.5 rounded-xl bg-gradient-to-r from-[#17202a] via-[#151c24] to-[#121922] border border-blue-400/30 flex flex-col sm:flex-row sm:items-center justify-between gap-1 shadow-inner">
+                    <div>
+                      <div className="text-xs sm:text-sm font-extrabold text-white flex items-center gap-1.5 flex-wrap">
+                        <span className="text-amber-400 font-black">📌 Pendiente:</span>
+                        <span className="text-amber-300 font-black">{bulks} {bulks === 1 ? 'Bulto' : 'Bultos'}</span>
+                        <span className="text-zinc-400 font-normal">y</span>
+                        <span className="text-teal-300 font-black">{units} {units === 1 ? 'Unidad' : 'Unidades'}</span>
+                      </div>
+                      <p className="text-[11.5px] font-mono text-emerald-400 font-bold mt-0.5">
+                        = {totalUnits} unidades totales <span className="text-zinc-400 font-normal font-sans">({bulks} cj × {unitsPerBulk} + {units} uds)</span>
+                      </p>
+                    </div>
+
+                    {totalUnits > 0 && (
+                      <div className="flex-shrink-0 self-end sm:self-center">
+                        <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-mono shadow-sm">
+                          Neto: {totalUnits} uds
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* INLINE MOVEMENT FUNCTIONS */}
                 <div className="mt-3 pt-3 border-t border-white/10 space-y-2.5">
                   {/* Row 1: [Entrada (Stock +)] [Salida (Venta -)] tabs and Delete Button */}
                   <div className="flex items-center justify-between gap-2">
@@ -880,7 +963,7 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
                       <button
                         type="button"
                         onClick={() => setMovementTypeFor(product.id, 'in')}
-                        className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
+                        className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
                           currentType === 'in'
                             ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/25'
                             : 'bg-white/5 hover:bg-white/10 text-zinc-400 border border-white/10'
@@ -893,7 +976,7 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
                       <button
                         type="button"
                         onClick={() => setMovementTypeFor(product.id, 'out')}
-                        className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
+                        className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
                           currentType === 'out'
                             ? 'bg-rose-500 text-white shadow-md shadow-rose-500/25'
                             : 'bg-white/5 hover:bg-white/10 text-zinc-400 border border-white/10'
@@ -907,7 +990,7 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
                     <button
                       type="button"
                       onClick={() => handleRemove(product.id)}
-                      className="p-2 rounded-xl text-zinc-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors flex-shrink-0"
+                      className="p-2 rounded-xl text-zinc-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors flex-shrink-0 cursor-pointer"
                       title="Quitar de la lista de reposición"
                     >
                       <Trash2 className="w-4 h-4" />
@@ -917,9 +1000,9 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
                   {/* Row 2: Direct Full-Width Action Confirmation Button */}
                   <button
                     type="button"
-                    disabled={processingId === product.id}
+                    disabled={processingId === product.id || totalUnits <= 0}
                     onClick={() => handleConfirmInlineMovement(product, item)}
-                    className={`w-full py-2.5 px-4 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg transition-all active:scale-[0.98] disabled:opacity-50 ${
+                    className={`w-full py-2.5 px-4 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg transition-all active:scale-[0.98] disabled:opacity-50 cursor-pointer ${
                       currentType === 'in'
                         ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/25'
                         : 'bg-rose-500 hover:bg-rose-400 text-white shadow-rose-500/25'
@@ -934,8 +1017,8 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
                       {processingId === product.id
                         ? 'Registrando...'
                         : currentType === 'in'
-                        ? `Confirmar Entrada (${displayQtyText})`
-                        : `Confirmar Salida (${displayQtyText})`}
+                        ? `Confirmar Entrada (${bulks} Bultos + ${units} Uds = ${totalUnits} uds)`
+                        : `Confirmar Salida (${bulks} Bultos + ${units} Uds = ${totalUnits} uds)`}
                     </span>
                   </button>
                 </div>
