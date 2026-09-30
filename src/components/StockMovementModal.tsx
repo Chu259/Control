@@ -28,7 +28,7 @@ export const StockMovementModal: React.FC<StockMovementModalProps> = ({
   isOpen,
   onClose,
   product,
-  initialType = 'in',
+  initialType = 'out',
   initialUnitType = 'unit',
   initialQuantity = 1,
   currency,
@@ -38,7 +38,7 @@ export const StockMovementModal: React.FC<StockMovementModalProps> = ({
   const [unitMode, setUnitMode] = useState<'unit' | 'bulk'>(initialUnitType);
   const [inputCount, setInputCount] = useState<number>(initialQuantity || 1);
   const [rawCount, setRawCount] = useState<string>(String(initialQuantity || 1));
-  const [reason, setReason] = useState<MovementReason>('compra');
+  const [reason, setReason] = useState<MovementReason>('venta');
   const [notes, setNotes] = useState('');
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
 
@@ -178,7 +178,7 @@ export const StockMovementModal: React.FC<StockMovementModalProps> = ({
                 setType('in');
                 setReason('compra');
               }}
-              className={`py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all ${
+              className={`py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
                 type === 'in'
                   ? 'bg-emerald-500 text-black shadow-md'
                   : 'text-zinc-400 hover:text-white'
@@ -194,9 +194,9 @@ export const StockMovementModal: React.FC<StockMovementModalProps> = ({
                 setType('out');
                 setReason('venta');
               }}
-              className={`py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all ${
+              className={`py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
                 type === 'out'
-                  ? 'bg-rose-500 text-white shadow-md'
+                  ? 'bg-zinc-700 text-white shadow-md border border-zinc-500'
                   : 'text-zinc-400 hover:text-white'
               }`}
             >

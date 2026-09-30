@@ -74,15 +74,34 @@ export const DummiesBurstScannerView: React.FC<DummiesBurstScannerViewProps> = (
   const [manualCode, setManualCode] = useState('');
   const [showManualInput, setShowManualInput] = useState(false);
 
-  // Recent scan feedback
+  // Requirement 1: Compact recent scan feedback (Cartel superior sin cantidades)
   const [lastFeedback, setLastFeedback] = useState<{
     type: 'success' | 'warning';
     title: string;
     subtitle: string;
-    detail?: string;
-    unitsBadge?: string;
     product?: Product;
   } | null>(null);
+  const feedbackTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Requirement 2: Contador Volátil Flotante Gigante (Al Centro)
+  const [volatileImpact, setVolatileImpact] = useState<{
+    id: number;
+    text: string;
+    mode: 'bulk' | 'unit';
+  } | null>(null);
+  const volatileImpactTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Requirement 3: Recuadro de Cierre de Tanda (Temporizador de 3 segundos de inactividad)
+  interface BatchStats {
+    bulks: number;
+    units: number;
+    totalUnits: number;
+    count: number;
+  }
+  const currentBatchRef = useRef<BatchStats>({ bulks: 0, units: 0, totalUnits: 0, count: 0 });
+  const batchFinalizedRef = useRef<boolean>(false);
+  const batchInactivityTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const [batchSummary, setBatchSummary] = useState<BatchStats | null>(null);
 
   // Session history
   const [historyList, setHistoryList] = useState<ScannedRecord[]>([]);
@@ -191,6 +210,18 @@ export const DummiesBurstScannerView: React.FC<DummiesBurstScannerViewProps> = (
       cancelAnimationFrame(scanLoopRef.current);
       scanLoopRef.current = null;
     }
+    if (batchInactivityTimerRef.current) {
+      clearTimeout(batchInactivityTimerRef.current);
+      batchInactivityTimerRef.current = null;
+    }
+    if (volatileImpactTimerRef.current) {
+      clearTimeout(volatileImpactTimerRef.current);
+      volatileImpactTimerRef.current = null;
+    }
+    if (feedbackTimerRef.current) {
+      clearTimeout(feedbackTimerRef.current);
+      feedbackTimerRef.current = null;
+    }
     if (stream) {
       stream.getTracks().forEach((t) => t.stop());
       setStream(null);
@@ -286,30 +317,41 @@ export const DummiesBurstScannerView: React.FC<DummiesBurstScannerViewProps> = (
         subtitle: `Código leído: ${cleanCode}`,
       });
 
-      // Clear feedback in 1.0s and continue loop immediately
+      if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
+      feedbackTimerRef.current = setTimeout(() => {
+        setLastFeedback(null);
+      }, 1800);
+
+      // Clear cooldown in 1.0s and continue loop immediately
       setTimeout(() => {
         isCooldownRef.current = false;
       }, 1000);
       return;
     }
 
+    // REQUIREMENT 3: Destruir de forma automática el recuadro de tanda al detectar un nuevo producto
+    if (batchFinalizedRef.current) {
+      currentBatchRef.current = { bulks: 0, units: 0, totalUnits: 0, count: 0 };
+      batchFinalizedRef.current = false;
+    }
+    setBatchSummary(null);
+
     // 1. LEER ACTIVAMENTE EL ESTADO DEL BOTÓN INFERIOR
     // Antes de guardar o actualizar en la base de datos local, verificar activamente formatModeRef
     const activeFormatMode = formatModeRef.current;
     const activeDestination = destinationRef.current;
     const unitsPerBulk = Math.max(1, product.unitsPerBulk || 12);
+    const isBulk = activeFormatMode === 'bulk';
+    const unitsAdded = isBulk ? unitsPerBulk : 1;
 
     if (activeDestination === 'replenishment') {
       // 2. APLICAR EL IMPACTO CORRECTO SEGÚN EL MODO:
       // - SI EL BOTÓN ESTÁ EN "Registrar como: 1 UNIDAD SUELTA":
       //   Ignora por completo el valor de 'unitsPerBulk' del producto.
       //   Incrementa estrictamente en +1 únicamente el contador de 'Unidades Sueltas Pendientes'.
-      //   El cartel verde debe decir: "Sumado a Reposición: +1 ud (Unidad Suelta)".
       // - SI EL BOTÓN ESTÁ EN "Registrar como: 1 BULTO / CAJA":
-      //   Suma estrictamente +1 únicamente al contador de 'Bultos Pendientes' (lo que suma unitsPerBulk unidades).
-      //   El cartel verde debe decir: "Sumado a Reposición: +[unitsPerBulk] uds (1 Bulto)".
+      //   Suma estrictamente +1 únicamente al contador de 'Bultos Pendientes' (lo que equivale a unitsPerBulk).
 
-      const isBulk = activeFormatMode === 'bulk';
       const result = StorageService.accumulateProductReposition(
         product.id,
         isBulk ? 'bulk' : 'unit',
@@ -317,53 +359,83 @@ export const DummiesBurstScannerView: React.FC<DummiesBurstScannerViewProps> = (
         isBulk ? `Ráfaga: +1 Bulto (+${unitsPerBulk} uds)` : 'Ráfaga: +1 Unidad suelta'
       );
 
-      const bulks = result ? result.bulksPending : (isBulk ? 1 : 0);
-      const units = result ? result.unitsPending : (isBulk ? 0 : 1);
-      const totalUnits = result ? result.totalUnits : (isBulk ? unitsPerBulk : 1);
-
+      // REQUIREMENT 1: Cartel superior compacto: sólo nombre del producto e icono (sin números para no tapar)
       setLastFeedback({
         type: 'success',
         title: product.name,
-        subtitle: isBulk
-          ? `Sumado a Reposición: +${unitsPerBulk} uds (1 Bulto)`
-          : 'Sumado a Reposición: +1 ud (Unidad Suelta)',
-        detail: `Pendiente: ${bulks} ${bulks === 1 ? 'Bulto' : 'Bultos'} y ${units} ${units === 1 ? 'Unidad' : 'Unidades'} (= ${totalUnits} unidades totales)`,
-        unitsBadge: isBulk ? `+${unitsPerBulk} uds (1 Bulto)` : '+1 ud (Unidad Suelta)',
+        subtitle: 'Registrado',
         product: result?.product || product,
       });
     } else {
       // MODO COMPRAS / INGRESO DE STOCK: SUMA ACUMULATIVA
-      const unitsToAdd = activeFormatMode === 'bulk' ? unitsPerBulk : 1;
-
       StorageService.recordStockMovement({
         productId: product.id,
         type: 'in',
-        quantity: unitsToAdd,
+        quantity: unitsAdded,
         reason: 'compra',
         unitType: activeFormatMode,
-        bulkQuantity: activeFormatMode === 'bulk' ? 1 : undefined,
+        bulkQuantity: isBulk ? 1 : undefined,
         barcodeScanned: cleanCode,
       });
 
-      const shopResult = ShoppingService.accumulateShoppingItem(
+      ShoppingService.accumulateShoppingItem(
         product.id,
-        unitsToAdd,
-        activeFormatMode === 'bulk' ? `Ingreso Ráfaga x${unitsToAdd}` : 'Ingreso Ráfaga x1 ud'
+        unitsAdded,
+        isBulk ? `Ingreso Ráfaga x${unitsAdded}` : 'Ingreso Ráfaga x1 ud'
       );
 
       const updatedProd = StorageService.getProducts().find((p) => p.id === product.id);
 
+      // REQUIREMENT 1: Cartel superior compacto
       setLastFeedback({
         type: 'success',
         title: product.name,
-        subtitle: activeFormatMode === 'bulk'
-          ? `Ingreso en Stock (+${unitsToAdd} uds en 1 Bulto)`
-          : 'Ingreso en Stock (+1 ud suelta)',
-        detail: `Stock en depósito: ${updatedProd?.stock ?? product.stock + unitsToAdd} uds • Compras: ${shopResult.totalUnits} uds`,
-        unitsBadge: activeFormatMode === 'bulk' ? `+${unitsToAdd} uds (1 Bulto)` : '+1 ud (Suelta)',
+        subtitle: 'Registrado',
         product: updatedProd || product,
       });
     }
+
+    // Auto-ocultar cartel superior tras 1.8s
+    if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
+    feedbackTimerRef.current = setTimeout(() => {
+      setLastFeedback(null);
+    }, 1800);
+
+    // REQUIREMENT 2: Contador Volátil Flotante Gigante (Al Centro del visor, arriba de 'RÁFAGA CONTINUA ACTIVA')
+    // Desvanece hacia arriba (fade-out) en 1.5s
+    const impactText = isBulk ? `+${unitsPerBulk}` : '+1';
+    setVolatileImpact({
+      id: Date.now(),
+      text: impactText,
+      mode: isBulk ? 'bulk' : 'unit',
+    });
+
+    if (volatileImpactTimerRef.current) {
+      clearTimeout(volatileImpactTimerRef.current);
+    }
+    volatileImpactTimerRef.current = setTimeout(() => {
+      setVolatileImpact(null);
+    }, 1500);
+
+    // REQUIREMENT 3: Acumular tanda actual y reiniciar temporizador de inactividad de 3 segundos
+    if (isBulk) {
+      currentBatchRef.current.bulks += 1;
+      currentBatchRef.current.totalUnits += unitsPerBulk;
+    } else {
+      currentBatchRef.current.units += 1;
+      currentBatchRef.current.totalUnits += 1;
+    }
+    currentBatchRef.current.count += 1;
+
+    if (batchInactivityTimerRef.current) {
+      clearTimeout(batchInactivityTimerRef.current);
+    }
+    batchInactivityTimerRef.current = setTimeout(() => {
+      if (currentBatchRef.current.count > 0) {
+        setBatchSummary({ ...currentBatchRef.current });
+        batchFinalizedRef.current = true;
+      }
+    }, 3000);
 
     // Add to session history
     const record: ScannedRecord = {
@@ -430,17 +502,42 @@ export const DummiesBurstScannerView: React.FC<DummiesBurstScannerViewProps> = (
         {/* Ambient Darkened Viewport Overlay with Aiming Reticle */}
         <div className="absolute inset-0 bg-black/35 pointer-events-none flex flex-col items-center justify-center p-4">
           {/* Aiming Reticle */}
-          <div className="relative w-72 h-44 sm:w-80 sm:h-52 rounded-3xl border-2 border-amber-400/80 shadow-[0_0_25px_rgba(245,158,11,0.35)] overflow-hidden flex items-center justify-center">
+          <div className="relative w-72 h-44 sm:w-80 sm:h-52 rounded-3xl border-2 border-amber-400/80 shadow-[0_0_25px_rgba(245,158,11,0.35)] overflow-hidden flex flex-col items-center justify-between p-3">
             {/* Corner Markers */}
-            <div className="absolute top-2 left-2 w-5 h-5 border-t-4 border-l-4 border-amber-400 rounded-tl-lg" />
-            <div className="absolute top-2 right-2 w-5 h-5 border-t-4 border-r-4 border-amber-400 rounded-tr-lg" />
-            <div className="absolute bottom-2 left-2 w-5 h-5 border-b-4 border-l-4 border-amber-400 rounded-bl-lg" />
-            <div className="absolute bottom-2 right-2 w-5 h-5 border-b-4 border-r-4 border-amber-400 rounded-br-lg" />
+            <div className="absolute top-2 left-2 w-5 h-5 border-t-4 border-l-4 border-amber-400 rounded-tl-lg pointer-events-none" />
+            <div className="absolute top-2 right-2 w-5 h-5 border-t-4 border-r-4 border-amber-400 rounded-tr-lg pointer-events-none" />
+            <div className="absolute bottom-2 left-2 w-5 h-5 border-b-4 border-l-4 border-amber-400 rounded-bl-lg pointer-events-none" />
+            <div className="absolute bottom-2 right-2 w-5 h-5 border-b-4 border-r-4 border-amber-400 rounded-br-lg pointer-events-none" />
 
             {/* Continuous Laser Scanning Animation Line */}
             <div className="absolute inset-x-0 h-1 bg-gradient-to-r from-transparent via-red-500 to-transparent shadow-[0_0_12px_#ef4444] animate-laser-scan pointer-events-none" />
 
-            <div className="text-center px-4 py-2 bg-black/60 rounded-xl backdrop-blur-xs border border-white/10 pointer-events-none">
+            {/* Top spacing spacer */}
+            <div className="h-2 pointer-events-none" />
+
+            {/* REQUIREMENT 2: CONTADOR VOLÁTIL FLOTANTE GIGANTE (AL CENTRO, ARRIBA DE 'RÁFAGA CONTINUA ACTIVA') */}
+            {volatileImpact && (
+              <div
+                key={volatileImpact.id}
+                className="absolute inset-0 flex items-center justify-center pointer-events-none z-20 pb-6"
+              >
+                <span
+                  className={`font-black text-6xl sm:text-7xl tracking-tighter select-none ${
+                    volatileImpact.mode === 'bulk'
+                      ? 'text-orange-400/90 drop-shadow-[0_0_30px_rgba(251,146,60,0.9)]'
+                      : 'text-teal-300/90 drop-shadow-[0_0_30px_rgba(45,212,191,0.9)]'
+                  }`}
+                  style={{
+                    animation: 'burstFloatFadeUp 1.5s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+                  }}
+                >
+                  {volatileImpact.text}
+                </span>
+              </div>
+            )}
+
+            {/* Cartel 'RÁFAGA CONTINUA ACTIVA' */}
+            <div className="text-center px-4 py-1.5 bg-black/60 rounded-xl backdrop-blur-xs border border-white/10 pointer-events-none z-10">
               <span className="text-[11px] font-mono text-zinc-300 font-bold uppercase tracking-wider flex items-center gap-1.5 justify-center">
                 <Zap className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
                 <span>Ráfaga Continua Activa</span>
@@ -549,49 +646,104 @@ export const DummiesBurstScannerView: React.FC<DummiesBurstScannerViewProps> = (
           </div>
         </div>
 
-        {/* FEEDBACK OVERLAY CARD (Pops up dynamically after each scan) */}
-        {lastFeedback && (
-          <div className="absolute top-28 inset-x-4 z-30 animate-scale-up pointer-events-none">
-            <div
-              className={`p-3.5 rounded-2xl border-2 backdrop-blur-md shadow-2xl flex items-center justify-between gap-3 ${
-                lastFeedback.type === 'success'
-                  ? 'bg-[#0f172a]/90 border-emerald-400/80 text-white'
-                  : 'bg-[#2a1215]/90 border-rose-500/80 text-white'
-              }`}
-            >
-              <div className="flex items-center gap-2.5 min-w-0">
-                <div
-                  className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${
-                    lastFeedback.type === 'success'
-                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                      : 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
-                  }`}
-                >
-                  {lastFeedback.type === 'success' ? (
-                    <CheckCircle2 className="w-5 h-5 stroke-[2.5]" />
-                  ) : (
-                    <AlertTriangle className="w-5 h-5 stroke-[2.5]" />
+        {/* REQUIREMENT 3: RECUADRO DE CIERRE DE TANDA (TEMPORIZADOR DE 3 SEGUNDOS DE INACTIVIDAD) */}
+        {batchSummary && (
+          <div className="absolute inset-0 z-35 flex items-center justify-center p-4 pointer-events-none animate-scale-up">
+            <div className="pointer-events-auto max-w-sm w-full bg-[#0d1117]/95 border-2 border-amber-400/80 rounded-3xl p-5 shadow-[0_0_60px_rgba(0,0,0,0.9)] backdrop-blur-xl flex flex-col items-center text-center space-y-3">
+              <div className="w-12 h-12 rounded-2xl bg-amber-500/20 border border-amber-400/40 text-amber-300 flex items-center justify-center shadow-lg shadow-amber-500/20">
+                <Boxes className="w-6 h-6 stroke-[2.5]" />
+              </div>
+
+              <div>
+                <span className="text-[10px] font-mono uppercase tracking-widest text-amber-400 font-extrabold px-2.5 py-0.5 rounded-full bg-amber-400/10 border border-amber-400/20">
+                  PAUSA DETECTADA (3s)
+                </span>
+                <h3 className="text-base sm:text-lg font-black text-white mt-1.5">
+                  Tanda Finalizada
+                </h3>
+              </div>
+
+              <div className="w-full bg-white/[0.04] border border-white/10 rounded-2xl p-3.5 space-y-2">
+                <p className="text-sm sm:text-base font-extrabold text-zinc-100">
+                  {batchSummary.bulks > 0 && (
+                    <span className="text-amber-300 font-black">
+                      {batchSummary.bulks} {batchSummary.bulks === 1 ? 'Bulto' : 'Bultos'}
+                    </span>
                   )}
-                </div>
-                <div className="min-w-0">
-                  <h4 className="text-xs sm:text-sm font-black truncate">{lastFeedback.title}</h4>
-                  <p className="text-xs sm:text-sm font-extrabold text-emerald-300 truncate mt-0.5">{lastFeedback.subtitle}</p>
-                  {lastFeedback.detail && (
-                    <p className="text-[11px] text-zinc-300 font-semibold truncate mt-0.5">{lastFeedback.detail}</p>
+                  {batchSummary.bulks > 0 && batchSummary.units > 0 && (
+                    <span className="text-zinc-400 mx-1.5">y</span>
                   )}
+                  {batchSummary.units > 0 && (
+                    <span className="text-teal-300 font-black">
+                      {batchSummary.units} {batchSummary.units === 1 ? 'Unidad' : 'Unidades'}
+                    </span>
+                  )}
+                  {batchSummary.bulks === 0 && batchSummary.units === 0 && (
+                    <span className="text-zinc-400">0 unidades</span>
+                  )}
+                </p>
+
+                <div className="pt-2 border-t border-white/10 flex items-center justify-center gap-1.5">
+                  <span className="text-xs text-zinc-400 font-medium">Equivale a:</span>
+                  <span className="text-base sm:text-lg font-mono font-black text-emerald-400">
+                    = {batchSummary.totalUnits} uds totales
+                  </span>
                 </div>
               </div>
 
-              {lastFeedback.unitsBadge && (
-                <div className="flex-shrink-0">
-                  <span className="px-2.5 py-1 rounded-xl bg-emerald-500 text-black font-mono font-black text-xs shadow-md">
-                    {lastFeedback.unitsBadge}
-                  </span>
-                </div>
-              )}
+              <div className="flex items-center gap-1.5 text-[11px] text-zinc-400">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                <span>Apunta a un nuevo producto para iniciar otra tanda</span>
+              </div>
             </div>
           </div>
         )}
+
+        {/* REQUIREMENT 1: FEEDBACK OVERLAY CARD (Cartel Superior Compacto: sólo icono y nombre de producto) */}
+        {lastFeedback && (
+          <div className="absolute top-28 inset-x-4 z-30 flex justify-center pointer-events-none animate-scale-up">
+            <div
+              className={`max-w-md px-4 py-2.5 rounded-2xl border-2 backdrop-blur-md shadow-2xl flex items-center gap-2.5 ${
+                lastFeedback.type === 'success'
+                  ? 'bg-emerald-950/90 border-emerald-400 text-white'
+                  : 'bg-rose-950/90 border-rose-500 text-white'
+              }`}
+            >
+              {lastFeedback.type === 'success' ? (
+                <CheckCircle2 className="w-5 h-5 text-emerald-400 stroke-[2.5] flex-shrink-0" />
+              ) : (
+                <AlertTriangle className="w-5 h-5 text-rose-400 stroke-[2.5] flex-shrink-0" />
+              )}
+              <span className="text-xs sm:text-sm font-black truncate">
+                {lastFeedback.type === 'success'
+                  ? `✔ ${lastFeedback.title} - Registrado`
+                  : `${lastFeedback.title}: ${lastFeedback.subtitle}`}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Dynamic Keyframes for Volatile Impact */}
+        <style>{`
+          @keyframes burstFloatFadeUp {
+            0% {
+              opacity: 0.95;
+              transform: translateY(15px) scale(0.85);
+            }
+            18% {
+              opacity: 1;
+              transform: translateY(-5px) scale(1.18);
+            }
+            65% {
+              opacity: 0.85;
+              transform: translateY(-25px) scale(1.12);
+            }
+            100% {
+              opacity: 0;
+              transform: translateY(-70px) scale(1.28);
+            }
+          }
+        `}</style>
 
         {/* MANUAL CODE INPUT (COLLAPSIBLE) */}
         {showManualInput && (

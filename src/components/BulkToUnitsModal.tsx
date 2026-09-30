@@ -223,12 +223,15 @@ export const BulkToUnitsModal: React.FC<BulkToUnitsModalProps> = ({
   onClose,
   onConfirm,
   onConfirmMovement,
-  movementType,
+  movementType = 'out',
   initialUnitsPerBulk = 12,
   bulkUnitName = 'Bulto',
   productName,
   currentStock,
 }) => {
+  // Action toggle: default to 'out' (Salida / Venta -)
+  const [currentType, setCurrentType] = useState<'in' | 'out'>('out');
+
   // Memory cleanup on open: Bultos and loose units reset to empty every time
   const [bultos, setBultos] = useState<string>('');
   const [unitsPerBulk, setUnitsPerBulk] = useState<string>(
@@ -245,6 +248,8 @@ export const BulkToUnitsModal: React.FC<BulkToUnitsModalProps> = ({
 
   useEffect(() => {
     if (isOpen) {
+      // Requirement: Por defecto al abrir el asistente, la opción activa debe ser 'Salida (Venta -)'
+      setCurrentType('out');
       const upb = initialUnitsPerBulk > 0 ? initialUnitsPerBulk : 12;
       setUnitsPerBulk(String(upb));
       setBultos('');
@@ -336,8 +341,8 @@ export const BulkToUnitsModal: React.FC<BulkToUnitsModalProps> = ({
     }
     Sound.playSuccessChime();
 
-    if (movementType && onConfirmMovement) {
-      onConfirmMovement(calculatedTotal, movementType);
+    if (onConfirmMovement) {
+      onConfirmMovement(calculatedTotal, currentType);
     } else if (onConfirm) {
       onConfirm(calculatedTotal);
     }
@@ -351,24 +356,20 @@ export const BulkToUnitsModal: React.FC<BulkToUnitsModalProps> = ({
     }
   };
 
-  // Determine modal theme & labels based on movementType ('in' | 'out' | undefined)
-  const isEntry = movementType === 'in';
-  const isExit = movementType === 'out';
-  const isMovement = isEntry || isExit;
+  // Determine modal theme & labels based on currentType ('in' | 'out')
+  const isEntry = currentType === 'in';
+  const isExit = currentType === 'out';
+  const isMovement = true;
 
   const titleText = isEntry
     ? 'Asistente de Entrada por Bultos'
-    : isExit
-    ? 'Asistente de Salida por Bultos'
-    : 'Asistente de Carga por Bultos';
+    : 'Asistente de Salida por Bultos';
 
   const badgeColor = isEntry
     ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
-    : isExit
-    ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
-    : 'bg-amber-500/20 text-amber-300 border-amber-500/30';
+    : 'bg-zinc-700/80 text-zinc-200 border-zinc-500';
 
-  const badgeText = isEntry ? '+ ENTRADA' : isExit ? '- SALIDA' : '📦 BULTOS';
+  const badgeText = isEntry ? '+ ENTRADA' : '– SALIDA';
 
   const resultingStock =
     currentStock !== undefined
@@ -385,7 +386,7 @@ export const BulkToUnitsModal: React.FC<BulkToUnitsModalProps> = ({
     >
       <div
         className={`relative w-full max-w-sm sm:max-w-md bg-[#131620] border ${
-          isExit ? 'border-rose-500/30' : isEntry ? 'border-emerald-500/30' : 'border-amber-500/25'
+          isExit ? 'border-zinc-500/40' : isEntry ? 'border-emerald-500/30' : 'border-amber-500/25'
         } rounded-[28px] overflow-hidden shadow-2xl flex flex-col max-h-[95vh] overflow-y-auto`}
       >
         {/* Header */}
@@ -394,18 +395,14 @@ export const BulkToUnitsModal: React.FC<BulkToUnitsModalProps> = ({
             <div
               className={`w-8 h-8 rounded-xl ${
                 isExit
-                  ? 'bg-rose-500/20 text-rose-400 border-rose-500/30'
-                  : isEntry
-                  ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
-                  : 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+                  ? 'bg-zinc-700/60 text-zinc-200 border-zinc-500/50'
+                  : 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
               } flex items-center justify-center border flex-shrink-0`}
             >
               {isEntry ? (
-                <ArrowDownLeft className="w-4 h-4 stroke-[3]" />
-              ) : isExit ? (
                 <ArrowUpRight className="w-4 h-4 stroke-[3]" />
               ) : (
-                <span className="font-mono text-sm font-black">📦</span>
+                <ArrowDownLeft className="w-4 h-4 stroke-[3]" />
               )}
             </div>
             <div className="min-w-0">
@@ -432,6 +429,42 @@ export const BulkToUnitsModal: React.FC<BulkToUnitsModalProps> = ({
 
         {/* Modal Content */}
         <form onSubmit={handleConfirm} className="p-3.5 sm:p-4 space-y-3">
+          {/* Action Buttons: Entrada (Stock +) vs Salida (Venta -) */}
+          <div className="grid grid-cols-2 gap-2 bg-[#0a0d14] p-1.5 rounded-2xl border border-white/10">
+            <button
+              type="button"
+              id="bulk-asistente-type-in"
+              onClick={() => {
+                Sound.playScanBeep();
+                setCurrentType('in');
+              }}
+              className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                currentType === 'in'
+                  ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/25'
+                  : 'bg-white/5 hover:bg-white/10 text-zinc-400 border border-white/10'
+              }`}
+            >
+              <ArrowUpRight className="w-4 h-4" />
+              <span>Entrada (Stock +)</span>
+            </button>
+            <button
+              type="button"
+              id="bulk-asistente-type-out"
+              onClick={() => {
+                Sound.playScanBeep();
+                setCurrentType('out');
+              }}
+              className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                currentType === 'out'
+                  ? 'bg-zinc-700 text-white shadow-md border border-zinc-500'
+                  : 'bg-white/5 hover:bg-white/10 text-zinc-400 border border-white/10'
+              }`}
+            >
+              <ArrowDownLeft className="w-4 h-4" />
+              <span>Salida (Venta -)</span>
+            </button>
+          </div>
+
           {/* Top Real-time Calculation Card */}
           <div className="p-3 bg-[#0a0d14] rounded-2xl border border-white/10 shadow-inner">
             <div className="flex items-center justify-between text-xs text-zinc-400 mb-1">
@@ -444,17 +477,15 @@ export const BulkToUnitsModal: React.FC<BulkToUnitsModalProps> = ({
               <span className="text-xs sm:text-sm font-semibold text-white">
                 {isEntry
                   ? 'Total Unidades a Sumar:'
-                  : isExit
-                  ? 'Total Unidades a Restar:'
-                  : 'Total Unidades Físicas:'}
+                  : 'Total Unidades a Restar:'}
               </span>
               <div
                 className={`flex items-baseline gap-1 font-mono text-2xl sm:text-3xl font-black ${
-                  isExit ? 'text-rose-400' : 'text-emerald-400'
+                  isExit ? 'text-zinc-200' : 'text-emerald-400'
                 }`}
               >
                 <span>
-                  {isEntry ? '+' : isExit ? '–' : ''}
+                  {isEntry ? '+' : '–'}
                   {calculatedTotal.toLocaleString()}
                 </span>
                 <span className="text-xs font-normal text-zinc-400">uds</span>
@@ -972,7 +1003,7 @@ export const BulkToUnitsModal: React.FC<BulkToUnitsModalProps> = ({
             )}
           </div>
 
-          {/* Bottom Confirm Button: Dynamic color and label for Entrada (+X uds), Salida (-X uds) or Ingreso */}
+          {/* Bottom Confirm Button: Dynamic color and label for Entrada (+X uds) or Salida (-X uds) */}
           <div className="pt-1.5">
             <button
               id="btn-confirm-bulk-to-units"
@@ -980,17 +1011,15 @@ export const BulkToUnitsModal: React.FC<BulkToUnitsModalProps> = ({
               disabled={calculatedTotal <= 0}
               className={`w-full py-3.5 px-4 ${
                 isExit
-                  ? 'bg-rose-600 hover:bg-rose-500 active:bg-rose-700'
-                  : 'bg-[#10b981] hover:bg-[#059669] active:bg-[#047857]'
-              } disabled:opacity-40 text-white font-black text-base sm:text-lg rounded-2xl shadow-xl flex items-center justify-center gap-2 active:scale-95 transition-all cursor-pointer`}
+                  ? 'bg-zinc-700 hover:bg-zinc-600 active:bg-zinc-800 text-white border border-zinc-500'
+                  : 'bg-[#10b981] hover:bg-[#059669] active:bg-[#047857] text-white'
+              } disabled:opacity-40 font-black text-base sm:text-lg rounded-2xl shadow-xl flex items-center justify-center gap-2 active:scale-95 transition-all cursor-pointer`}
             >
               <Check className="w-6 h-6 stroke-[3]" />
               <span>
                 {isEntry
                   ? `✓ Confirmar Entrada (+${calculatedTotal.toLocaleString()} uds)`
-                  : isExit
-                  ? `✓ Confirmar Salida (–${calculatedTotal.toLocaleString()} uds)`
-                  : `✓ Confirmar Ingreso (${calculatedTotal.toLocaleString()} uds)`}
+                  : `✓ Confirmar Salida (–${calculatedTotal.toLocaleString()} uds)`}
               </span>
             </button>
           </div>

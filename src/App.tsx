@@ -84,7 +84,7 @@ export default function App() {
 
   const [movementModalOpen, setMovementModalOpen] = useState(false);
   const [movementProduct, setMovementProduct] = useState<Product | null>(null);
-  const [movementType, setMovementType] = useState<MovementType>('in');
+  const [movementType, setMovementType] = useState<MovementType>('out');
   const [movementUnitType, setMovementUnitType] = useState<'unit' | 'bulk'>('unit');
   const [movementInitialQuantity, setMovementInitialQuantity] = useState<number>(1);
 
