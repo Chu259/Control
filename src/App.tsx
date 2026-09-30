@@ -34,7 +34,7 @@ import { UserLoginModal } from './components/UserLoginModal';
 import { WelcomeLoginScreen } from './components/WelcomeLoginScreen';
 import { CategoryManagerModal } from './components/CategoryManagerModal';
 import { NavigationMenu } from './components/NavigationMenu';
-import { AlertTriangle, PackageX, Plus, RefreshCw, Smartphone, Sparkles } from 'lucide-react';
+import { AlertTriangle, Hourglass, PackageX, Plus, RefreshCw, Smartphone, Sparkles } from 'lucide-react';
 import { App as CapApp } from '@capacitor/app';
 import { Sound } from './services/sound';
 import { checkStockAlert } from './utils/stockAlert';
@@ -141,6 +141,32 @@ export default function App() {
 
   // Low stock counter (Dual alert: unidad o bulto por debajo del mínimo)
   const lowStockCount = products.filter((p) => checkStockAlert(p, settings.defaultMinStock).isLow).length;
+
+  // Stagnant products counter (+7 days inactive with stock > 0)
+  const stagnantCount = products.filter((p) => {
+    if (p.stock <= 0) return false;
+    const prodMovements = movements.filter((m) => m.productId === p.id);
+    let lastTime = 0;
+    for (const m of prodMovements) {
+      const t = new Date(m.timestamp).getTime();
+      if (t > lastTime) lastTime = t;
+    }
+    if (p.lastVerifiedAt) {
+      const vTime = new Date(p.lastVerifiedAt).getTime();
+      if (vTime > lastTime) lastTime = vTime;
+    }
+    if (lastTime === 0) {
+      lastTime = p.addedAt
+        ? new Date(p.addedAt).getTime()
+        : p.lastUpdated
+        ? new Date(p.lastUpdated).getTime()
+        : Date.now() - 10 * 24 * 60 * 60 * 1000;
+    }
+    const days = Math.floor((Date.now() - lastTime) / (1000 * 60 * 60 * 24));
+    return days >= 7;
+  }).length;
+
+  const totalAlertsCount = lowStockCount + stagnantCount;
 
   // Requirement 1, 2, 3 & 4: Real-time reposition pending count reflecting the accumulated total
   const repList = ShoppingService.getReplenishmentList();
@@ -487,7 +513,7 @@ export default function App() {
         {currentTab !== 'dummies' && (
           <AndroidHeader
             settings={settings}
-            lowStockCount={lowStockCount}
+            lowStockCount={totalAlertsCount}
             onOpenAlerts={() => setCurrentTab('alerts')}
             onOpenSync={() => setCurrentTab('sync')}
             onScanBarcode={handleOpenSearchScanner}
@@ -565,20 +591,30 @@ export default function App() {
                 </div>
               )}
 
-              {/* Low Stock Quick Banner if alerts active */}
-              {lowStockCount > 0 && selectedCategory === 'all' && !searchQuery && (
+              {/* Alert Quick Banner if low stock or stagnant active */}
+              {totalAlertsCount > 0 && selectedCategory === 'all' && !searchQuery && (
                 <div className="px-4 py-1">
                   <div
                     onClick={() => setCurrentTab('alerts')}
-                    className="p-2.5 rounded-xl bg-rose-950/30 border border-rose-500/20 flex items-center justify-between cursor-pointer hover:bg-rose-950/40 transition-colors"
+                    className={`p-2.5 rounded-xl border flex items-center justify-between cursor-pointer transition-colors ${
+                      stagnantCount > 0 && lowStockCount === 0
+                        ? 'bg-amber-950/30 border-amber-500/25 hover:bg-amber-950/40'
+                        : 'bg-rose-950/30 border-rose-500/20 hover:bg-rose-950/40'
+                    }`}
                   >
                     <div className="flex items-center gap-2">
-                      <AlertTriangle className="w-4 h-4 text-rose-400 animate-pulse" />
-                      <span className="text-xs text-rose-300 font-medium">
-                        {lowStockCount} producto(s) en stock crítico o bajo
+                      {stagnantCount > 0 && lowStockCount === 0 ? (
+                        <Hourglass className="w-4 h-4 text-amber-400 animate-pulse" />
+                      ) : (
+                        <AlertTriangle className="w-4 h-4 text-rose-400 animate-pulse" />
+                      )}
+                      <span className="text-xs font-medium text-white">
+                        {lowStockCount > 0 && `${lowStockCount} por agotarse`}
+                        {lowStockCount > 0 && stagnantCount > 0 && ' • '}
+                        {stagnantCount > 0 && `${stagnantCount} mercadería estancada (+7d)`}
                       </span>
                     </div>
-                    <span className="text-[11px] text-rose-400 font-semibold underline">
+                    <span className="text-[11px] text-amber-400 font-semibold underline">
                       Ver alertas →
                     </span>
                   </div>
@@ -719,6 +755,8 @@ export default function App() {
           {currentTab === 'alerts' && (
             <AlertsView
               products={products}
+              movements={movements}
+              categories={categories}
               settings={settings}
               currency={settings.currencySymbol || '$'}
               onUpdateSettings={(newSettings) => {
@@ -731,6 +769,7 @@ export default function App() {
                 setMovementUnitType('unit');
                 setMovementModalOpen(true);
               }}
+              onDataUpdated={reloadAllData}
             />
           )}
 
@@ -772,7 +811,7 @@ export default function App() {
         <NavigationMenu
           currentTab={currentTab}
           onTabChange={setCurrentTab}
-          lowStockCount={lowStockCount}
+          lowStockCount={totalAlertsCount}
           repositionCount={repositionPendingTotal}
           onLogout={handleLogout}
           onOpenScanner={() => {

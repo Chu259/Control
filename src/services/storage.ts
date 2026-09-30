@@ -616,6 +616,65 @@ export const StorageService = {
     return { product: updatedProduct, movement };
   },
 
+  verifyProductGondola(productId: string, notes?: string): { product: Product; movement: StockMovement } {
+    const products = this.getProducts();
+    const productIndex = products.findIndex((p) => p.id === productId);
+    if (productIndex === -1) {
+      throw new Error('Producto no encontrado');
+    }
+
+    const currentProduct = products[productIndex];
+    const nowIso = new Date().toISOString();
+
+    const updatedProduct: Product = {
+      ...currentProduct,
+      lastVerifiedAt: nowIso,
+      lastUpdated: nowIso,
+    };
+    products[productIndex] = updatedProduct;
+    this.saveProducts(products);
+
+    const currentUser = AuthService.getCurrentUser();
+    const activeUserId = currentUser?.id;
+    const activeUserName = currentUser?.name || 'Empleado';
+    const activeUserRole = currentUser?.role || 'user';
+
+    const movement: StockMovement = {
+      id: `mov-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      productId: currentProduct.id,
+      productName: currentProduct.name,
+      barcode: currentProduct.barcodeUnit || currentProduct.barcode,
+      barcodeScanned: currentProduct.barcodeUnit,
+      format: 'unit',
+      unitType: 'unit',
+      type: 'in',
+      quantity: 0,
+      previousStock: currentProduct.stock,
+      newStock: currentProduct.stock,
+      reason: 'verificacion',
+      notes: notes || 'Verificado: Góndola OK (Control de inactividad)',
+      timestamp: nowIso,
+      userId: activeUserId,
+      userName: activeUserName,
+      userRole: activeUserRole,
+      deviceId: (() => {
+        try {
+          const cfg = JSON.parse(localStorage.getItem('stock_app_settings_v1') || '{}')?.syncConfig;
+          return cfg?.deviceId || 'dev-local';
+        } catch {
+          return 'dev-local';
+        }
+      })(),
+      synced: false,
+    };
+
+    const movements = this.getMovements();
+    const updatedMovements = [movement, ...movements].slice(0, 500);
+    this.saveMovements(updatedMovements);
+
+    return { product: updatedProduct, movement };
+  },
+
   getMovements(): StockMovement[] {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.MOVEMENTS);

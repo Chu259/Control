@@ -20,6 +20,7 @@ export interface Product {
   image?: string; // Data URL icon stored in local APK DB
   notes?: string;
   lastUpdated: string;
+  lastVerifiedAt?: string; // Fecha de verificación de góndola / inactividad (Góndola OK)
   // Reposition status
   isPendingReposition?: boolean;
   repositionQuantity?: number; // Total net physical units
@@ -64,7 +65,7 @@ export interface Category {
 }
 
 export type MovementType = 'in' | 'out';
-export type MovementReason = 'compra' | 'venta' | 'devolucion' | 'ajuste' | 'merma';
+export type MovementReason = 'compra' | 'venta' | 'devolucion' | 'ajuste' | 'merma' | 'verificacion';
 export type MovementFormat = 'unit' | 'bulk';
 export type UserRole = 'admin' | 'user';
 export type AccessMethod = 'password' | 'device_lock' | 'biometric';
