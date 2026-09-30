@@ -54,9 +54,13 @@ export const DummiesBurstScannerView: React.FC<DummiesBurstScannerViewProps> = (
 }) => {
   // Requirement 3: Destination toggle ('replenishment' vs 'shopping')
   const [destination, setDestination] = useState<'replenishment' | 'shopping'>('replenishment');
+  const destinationRef = useRef<'replenishment' | 'shopping'>('replenishment');
+  destinationRef.current = destination;
 
-  // Requirement 4: Format toggle ('bulk' vs 'unit')
+  // Requirement 4: Format toggle ('bulk' vs 'unit') with synchronized ref to eliminate stale closures
   const [formatMode, setFormatMode] = useState<'bulk' | 'unit'>('bulk');
+  const formatModeRef = useRef<'bulk' | 'unit'>('bulk');
+  formatModeRef.current = formatMode;
 
   // Camera stream and status
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -75,6 +79,7 @@ export const DummiesBurstScannerView: React.FC<DummiesBurstScannerViewProps> = (
     type: 'success' | 'warning';
     title: string;
     subtitle: string;
+    detail?: string;
     unitsBadge?: string;
     product?: Product;
   } | null>(null);
@@ -89,6 +94,7 @@ export const DummiesBurstScannerView: React.FC<DummiesBurstScannerViewProps> = (
   const isCooldownRef = useRef(false);
   const lastScannedCodeRef = useRef<string | null>(null);
   const lastScannedTimeRef = useRef<number>(0);
+  const handleProcessBarcodeRef = useRef<(code: string) => void>(() => {});
 
   // Instantiate native MLKit BarcodeDetector
   const getBarcodeDetector = () => {
@@ -225,7 +231,7 @@ export const DummiesBurstScannerView: React.FC<DummiesBurstScannerViewProps> = (
           if (barcodes && barcodes.length > 0) {
             const raw = barcodes[0].rawValue;
             if (raw && typeof raw === 'string') {
-              handleProcessBarcode(raw.trim());
+              handleProcessBarcodeRef.current(raw.trim());
             }
           }
         } catch {
@@ -238,7 +244,7 @@ export const DummiesBurstScannerView: React.FC<DummiesBurstScannerViewProps> = (
     scanLoopRef.current = requestAnimationFrame(loop);
   };
 
-  // Requirement 5: Cross-Recognition Logic & Impact
+  // Requirement 1, 2 & 3: Strict Mode Verification & Mathematical Impact
   const handleProcessBarcode = (code: string) => {
     const cleanCode = code.trim();
     if (!cleanCode || cleanCode.length < 3) return;
@@ -280,57 +286,69 @@ export const DummiesBurstScannerView: React.FC<DummiesBurstScannerViewProps> = (
         subtitle: `Código leído: ${cleanCode}`,
       });
 
-      // Clear feedback in 1.4s and continue loop immediately
+      // Clear feedback in 1.0s and continue loop immediately
       setTimeout(() => {
         isCooldownRef.current = false;
       }, 1000);
       return;
     }
 
-    // REQUIREMENT 5: CROSS RECOGNITION (CRUCE DE DATOS)
-    // If formatMode === 'bulk', even if unit barcode was scanned, add unitsPerBulk (e.g. 12 units)
+    // 1. LEER ACTIVAMENTE EL ESTADO DEL BOTÓN INFERIOR
+    // Antes de guardar o actualizar en la base de datos local, verificar activamente formatModeRef
+    const activeFormatMode = formatModeRef.current;
+    const activeDestination = destinationRef.current;
     const unitsPerBulk = Math.max(1, product.unitsPerBulk || 12);
-    const unitsToAdd = formatMode === 'bulk' ? unitsPerBulk : 1;
 
-    if (destination === 'replenishment') {
-      // REQUIREMENT 1 & 2: MODO REPOSICIÓN - SEPARACIÓN ESTRICTA BULTOS VS UNIDADES
-      const isBulkScan = formatMode === 'bulk';
+    if (activeDestination === 'replenishment') {
+      // 2. APLICAR EL IMPACTO CORRECTO SEGÚN EL MODO:
+      // - SI EL BOTÓN ESTÁ EN "Registrar como: 1 UNIDAD SUELTA":
+      //   Ignora por completo el valor de 'unitsPerBulk' del producto.
+      //   Incrementa estrictamente en +1 únicamente el contador de 'Unidades Sueltas Pendientes'.
+      //   El cartel verde debe decir: "Sumado a Reposición: +1 ud (Unidad Suelta)".
+      // - SI EL BOTÓN ESTÁ EN "Registrar como: 1 BULTO / CAJA":
+      //   Suma estrictamente +1 únicamente al contador de 'Bultos Pendientes' (lo que suma unitsPerBulk unidades).
+      //   El cartel verde debe decir: "Sumado a Reposición: +[unitsPerBulk] uds (1 Bulto)".
+
+      const isBulk = activeFormatMode === 'bulk';
       const result = StorageService.accumulateProductReposition(
         product.id,
-        isBulkScan ? 'bulk' : 'unit',
+        isBulk ? 'bulk' : 'unit',
         1,
-        isBulkScan ? 'Ráfaga: +1 Bulto' : 'Ráfaga: +1 Unidad suelta'
+        isBulk ? `Ráfaga: +1 Bulto (+${unitsPerBulk} uds)` : 'Ráfaga: +1 Unidad suelta'
       );
 
-      const bulks = result ? result.bulksPending : (isBulkScan ? 1 : 0);
-      const units = result ? result.unitsPending : (isBulkScan ? 0 : 1);
-      const totalUnits = result ? result.totalUnits : (isBulkScan ? unitsPerBulk : 1);
+      const bulks = result ? result.bulksPending : (isBulk ? 1 : 0);
+      const units = result ? result.unitsPending : (isBulk ? 0 : 1);
+      const totalUnits = result ? result.totalUnits : (isBulk ? unitsPerBulk : 1);
 
       setLastFeedback({
         type: 'success',
         title: product.name,
-        subtitle: `Pendiente: ${bulks} ${bulks === 1 ? 'Bulto' : 'Bultos'} y ${units} ${units === 1 ? 'Unidad' : 'Unidades'} (= ${totalUnits} uds totales)`,
-        unitsBadge: isBulkScan ? `+1 Bulto (${unitsPerBulk}u)` : `+1 Ud suelta`,
+        subtitle: isBulk
+          ? `Sumado a Reposición: +${unitsPerBulk} uds (1 Bulto)`
+          : 'Sumado a Reposición: +1 ud (Unidad Suelta)',
+        detail: `Pendiente: ${bulks} ${bulks === 1 ? 'Bulto' : 'Bultos'} y ${units} ${units === 1 ? 'Unidad' : 'Unidades'} (= ${totalUnits} unidades totales)`,
+        unitsBadge: isBulk ? `+${unitsPerBulk} uds (1 Bulto)` : '+1 ud (Unidad Suelta)',
         product: result?.product || product,
       });
     } else {
-      // REQUIREMENT 1 & 2: MODO COMPRAS / INGRESO - SUMA ACUMULATIVA
-      // Register directly as stock entry
+      // MODO COMPRAS / INGRESO DE STOCK: SUMA ACUMULATIVA
+      const unitsToAdd = activeFormatMode === 'bulk' ? unitsPerBulk : 1;
+
       StorageService.recordStockMovement({
         productId: product.id,
         type: 'in',
         quantity: unitsToAdd,
         reason: 'compra',
-        unitType: formatMode,
-        bulkQuantity: formatMode === 'bulk' ? 1 : undefined,
+        unitType: activeFormatMode,
+        bulkQuantity: activeFormatMode === 'bulk' ? 1 : undefined,
         barcodeScanned: cleanCode,
       });
 
-      // Accumulate in shopping list
       const shopResult = ShoppingService.accumulateShoppingItem(
         product.id,
         unitsToAdd,
-        formatMode === 'bulk' ? `Ingreso Ráfaga x${unitsToAdd}` : 'Ingreso Ráfaga x1 ud'
+        activeFormatMode === 'bulk' ? `Ingreso Ráfaga x${unitsToAdd}` : 'Ingreso Ráfaga x1 ud'
       );
 
       const updatedProd = StorageService.getProducts().find((p) => p.id === product.id);
@@ -338,8 +356,11 @@ export const DummiesBurstScannerView: React.FC<DummiesBurstScannerViewProps> = (
       setLastFeedback({
         type: 'success',
         title: product.name,
-        subtitle: `Ingreso en Stock (+${unitsToAdd} uds, Total: ${updatedProd?.stock ?? product.stock + unitsToAdd} uds • Compras: ${shopResult.totalUnits} uds)`,
-        unitsBadge: formatMode === 'bulk' ? `+${unitsToAdd} uds (1 Bulto)` : `+1 ud (Suelta)`,
+        subtitle: activeFormatMode === 'bulk'
+          ? `Ingreso en Stock (+${unitsToAdd} uds en 1 Bulto)`
+          : 'Ingreso en Stock (+1 ud suelta)',
+        detail: `Stock en depósito: ${updatedProd?.stock ?? product.stock + unitsToAdd} uds • Compras: ${shopResult.totalUnits} uds`,
+        unitsBadge: activeFormatMode === 'bulk' ? `+${unitsToAdd} uds (1 Bulto)` : '+1 ud (Suelta)',
         product: updatedProd || product,
       });
     }
@@ -349,9 +370,9 @@ export const DummiesBurstScannerView: React.FC<DummiesBurstScannerViewProps> = (
       id: `burst-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
       code: cleanCode,
       productName: product.name,
-      unitsAdded: unitsToAdd,
-      formatMode,
-      destination,
+      unitsAdded: activeFormatMode === 'bulk' ? unitsPerBulk : 1,
+      formatMode: activeFormatMode,
+      destination: activeDestination,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
       productId: product.id,
     };
@@ -364,6 +385,23 @@ export const DummiesBurstScannerView: React.FC<DummiesBurstScannerViewProps> = (
     setTimeout(() => {
       isCooldownRef.current = false;
     }, 850);
+  };
+
+  // Keep ref up to date on each render
+  handleProcessBarcodeRef.current = handleProcessBarcode;
+
+  const toggleDestination = () => {
+    Sound.playSuccessChime();
+    const nextDest = destinationRef.current === 'replenishment' ? 'shopping' : 'replenishment';
+    destinationRef.current = nextDest;
+    setDestination(nextDest);
+  };
+
+  const toggleFormatMode = () => {
+    Sound.playSuccessChime();
+    const nextMode = formatModeRef.current === 'bulk' ? 'unit' : 'bulk';
+    formatModeRef.current = nextMode;
+    setFormatMode(nextMode);
   };
 
   const handleManualSubmit = (e: React.FormEvent) => {
@@ -417,10 +455,8 @@ export const DummiesBurstScannerView: React.FC<DummiesBurstScannerViewProps> = (
           <button
             type="button"
             id="burst-destination-toggle"
-            onClick={() => {
-              Sound.playSuccessChime();
-              setDestination((prev) => (prev === 'replenishment' ? 'shopping' : 'replenishment'));
-            }}
+            data-destination={destination}
+            onClick={toggleDestination}
             className={`w-full py-3 px-4 rounded-2xl shadow-2xl flex items-center justify-between transition-all duration-200 active:scale-[0.98] border-2 cursor-pointer ${
               destination === 'replenishment'
                 ? 'bg-gradient-to-r from-purple-700 via-indigo-700 to-purple-800 border-purple-400 text-white shadow-purple-900/50'
@@ -539,7 +575,10 @@ export const DummiesBurstScannerView: React.FC<DummiesBurstScannerViewProps> = (
                 </div>
                 <div className="min-w-0">
                   <h4 className="text-xs sm:text-sm font-black truncate">{lastFeedback.title}</h4>
-                  <p className="text-[11px] text-zinc-300 truncate mt-0.5">{lastFeedback.subtitle}</p>
+                  <p className="text-xs sm:text-sm font-extrabold text-emerald-300 truncate mt-0.5">{lastFeedback.subtitle}</p>
+                  {lastFeedback.detail && (
+                    <p className="text-[11px] text-zinc-300 font-semibold truncate mt-0.5">{lastFeedback.detail}</p>
+                  )}
                 </div>
               </div>
 
@@ -586,10 +625,8 @@ export const DummiesBurstScannerView: React.FC<DummiesBurstScannerViewProps> = (
           <button
             type="button"
             id="burst-format-toggle"
-            onClick={() => {
-              Sound.playSuccessChime();
-              setFormatMode((prev) => (prev === 'bulk' ? 'unit' : 'bulk'));
-            }}
+            data-mode={formatMode}
+            onClick={toggleFormatMode}
             className={`w-full py-3.5 px-4 rounded-2xl shadow-2xl flex items-center justify-between transition-all duration-200 active:scale-[0.98] border-2 cursor-pointer ${
               formatMode === 'bulk'
                 ? 'bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 border-amber-200 text-black shadow-amber-500/30'

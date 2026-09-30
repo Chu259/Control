@@ -78,7 +78,7 @@ function savePersistedSync(code: string, data: StoreSyncData): void {
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = parseInt(process.env.PORT || '3000', 10);
 
   // Enable CORS for mobile devices, webviews, Capacitor, local IPs
   app.use((req, res, next) => {
