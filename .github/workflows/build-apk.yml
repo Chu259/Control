@@ -60,6 +60,15 @@ jobs:
         cd android
         ./gradlew assembleDebug
 
+    - name: Generar Firma Fija Provisoria
+      run: |
+        keytool -genkey -v -keystore mi-clave.keystore -alias mi-alias -keyalg RSA -keysize 2048 -validity 10000 -storepass claveDepos123 -keypass claveDepos123 -dname "CN=Depos, O=Desarrollo, C=AR"
+        openssl base64 -A -in mi-clave.keystore -out base64.txt
+        echo "==== COPIÁ EL TEXTO DE ABAJO ===="
+        cat base64.txt
+        echo ""
+        echo "==== FIN DEL TEXTO ===="
+
     - name: Prepare APK with name depos
       run: |
         if [ -f android/app/build/outputs/apk/debug/app-debug.apk ]; then
