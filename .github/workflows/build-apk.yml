@@ -60,25 +60,26 @@ jobs:
         cd android
         ./gradlew assembleDebug
 
-    - name: Generar Firma Fija Provisoria
-      run: |
-        keytool -genkey -v -keystore mi-clave.keystore -alias mi-alias -keyalg RSA -keysize 2048 -validity 10000 -storepass claveDepos123 -keypass claveDepos123 -dname "CN=Depos, O=Desarrollo, C=AR"
-        openssl base64 -A -in mi-clave.keystore -out base64.txt
-        echo "==== COPIÁ EL TEXTO DE ABAJO ===="
-        cat base64.txt
-        echo ""
-        echo "==== FIN DEL TEXTO ===="
-
     - name: Prepare APK with name depos
       run: |
         if [ -f android/app/build/outputs/apk/debug/app-debug.apk ]; then
           cp android/app/build/outputs/apk/debug/app-debug.apk android/app/build/outputs/apk/debug/depos.apk
         fi
 
+    - name: Firmar APK con tu clave fija
+      uses: r0adkll/sign-android-release@v1
+      id: sign_app
+      with:
+        releaseDirectory: android/app/build/outputs/apk/debug
+        signingKeyBase64: ${{ secrets.ANDROID_KEYSTORE }}
+        alias: mi-alias
+        keyStorePassword: claveDepos123
+        keyPassword: claveDepos123
+
     - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
       with:
         name: depos-apk
         path: |
-          android/app/build/outputs/apk/debug/depos.apk
-          android/app/build/outputs/apk/debug/app-debug.apk
+          android/app/build/outputs/apk/debug/depos-signed.apk
+          android/app/build/outputs/apk/debug/app-debug-signed.apk
