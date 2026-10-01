@@ -16,6 +16,7 @@ import { Sound } from '../services/sound';
 import { checkStockAlert } from '../utils/stockAlert';
 import { ShoppingService } from '../services/shoppingService';
 import { StorageService } from '../services/storage';
+import { checkProductDailyGondola, getNext19hs } from '../utils/dailyGondolaControl';
 
 interface AlertsViewProps {
   products: Product[];
@@ -38,81 +39,34 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
   onQuickRestock,
   onDataUpdated,
 }) => {
-  const [filterTab, setFilterTab] = useState<'all' | 'stagnant' | 'lowStock'>('all');
+  const [filterTab, setFilterTab] = useState<'all' | 'dailyGondola' | 'lowStock'>('all');
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [, setTick] = useState(0);
+
+  // Periodic tick every 30s so the 19:00 hs trigger and timers stay live with device clock
+  React.useEffect(() => {
+    const timer = setInterval(() => {
+      setTick((t) => t + 1);
+    }, 30000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Retrieve current movements list from prop or fallback to StorageService
   const allMovements = movements && movements.length > 0 ? movements : StorageService.getMovements();
 
-  // REQUIREMENT 1: Filtro de Inactividad (Control de Fechas)
-  // Rastrear la fecha del último registro (Entrada o Salida) de cada producto.
-  // Si stock > 0 pero acumula más de 7 días consecutivos sin ningún movimiento -> "Estancado".
-  const stagnantList = products
+  // REQUIREMENT 1: Disparador Diario (19:00 hs) - Control Diario de Góndola
+  // Cualquier producto con stock > 0 sin Entrada ni Salida en las últimas 24hs
+  // que no esté actualmente liberado por una verificación de "Góndola OK".
+  const dailyControlList = products
     .map((product) => {
-      // Filtrar movimientos de este producto
-      const prodMovements = allMovements.filter((m) => m.productId === product.id);
-
-      let lastTime = 0;
-      if (prodMovements.length > 0) {
-        for (const m of prodMovements) {
-          const t = new Date(m.timestamp).getTime();
-          if (t > lastTime) {
-            lastTime = t;
-          }
-        }
-      }
-
-      // Verificar si hubo un evento de "Góndola OK" registrado
-      if (product.lastVerifiedAt) {
-        const vTime = new Date(product.lastVerifiedAt).getTime();
-        if (vTime > lastTime) {
-          lastTime = vTime;
-        }
-      }
-
-      // Si nunca tuvo movimientos ni verificación, usar fecha de creación o referencia
-      if (lastTime === 0) {
-        if (product.addedAt) {
-          lastTime = new Date(product.addedAt).getTime();
-        } else if (product.lastUpdated) {
-          lastTime = new Date(product.lastUpdated).getTime();
-        } else {
-          // Por defecto 10 días atrás si es producto inicial sin historial
-          lastTime = Date.now() - 10 * 24 * 60 * 60 * 1000;
-        }
-      }
-
-      const now = Date.now();
-      const diffMs = Math.max(0, now - lastTime);
-      const daysInactive = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-
-      // Clasificación interna: stock disponible > 0 y más de 7 días consecutivos sin movimientos
-      const isStagnant = product.stock > 0 && daysInactive >= 7;
-
-      // Formateo del stock en depósito (en bultos o unidades según unidades por bulto)
-      const unitsPerBulk = Math.max(1, product.unitsPerBulk || 12);
-      const bulks = Math.floor(product.stock / unitsPerBulk);
-      const loose = product.stock % unitsPerBulk;
-
-      let stockDesc = '';
-      if (product.stock >= unitsPerBulk) {
-        const bName = product.bulkUnitName || 'bulto';
-        const bPlural = bulks === 1 ? bName : `${bName}s`;
-        stockDesc = `${bulks} ${bPlural}${loose > 0 ? ` y ${loose} uds` : ''}`;
-      } else {
-        stockDesc = `${product.stock} ${product.stock === 1 ? 'unidad' : 'unidades'}`;
-      }
-
+      const status = checkProductDailyGondola(product, allMovements);
       return {
         product,
-        daysInactive,
-        isStagnant,
-        stockDesc,
-        lastActivityDate: new Date(lastTime),
+        ...status,
       };
     })
-    .filter((item) => item.isStagnant)
-    .sort((a, b) => b.daysInactive - a.daysInactive); // Mayor inactividad primero
+    .filter((item) => item.isPendingVerification)
+    .sort((a, b) => b.hoursSinceLastMovement - a.hoursSinceLastMovement);
 
   // Lista tradicional de productos con stock bajo
   const lowStockList = products
@@ -133,14 +87,14 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
     return found ? found.name : 'General';
   };
 
-  // REQUIREMENT 3: Botón de Acción "Góndola OK"
-  // Registra un evento en el historial que pone el contador de inactividad a cero,
-  // ocultando la alerta por los próximos 7 días.
+  // REQUIREMENT 3: Reinicio con "Góndola OK"
+  // Al presionarlo, el empleado confirma que revisó el estante,
+  // la alerta se oculta de inmediato y queda liberado hasta las 19:00 hs del día siguiente.
   const handleVerifyGondola = (product: Product) => {
     Sound.playSuccessChime();
-    StorageService.verifyProductGondola(product.id);
+    StorageService.verifyProductGondola(product.id, 'Verificado: Góndola OK (Control Diario 19:00 hs)');
     setActionNotice(
-      `"${product.name}" marcado como Góndola OK. Inactividad reiniciada a cero (oculto por 7 días).`
+      `"${product.name}" verificado como Góndola OK. Liberado hasta las 19:00 hs de mañana.`
     );
     setTimeout(() => setActionNotice(null), 4000);
     if (onDataUpdated) {
@@ -155,7 +109,7 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
   };
 
   const handleAddReplenish = (productId: string, productName: string) => {
-    StorageService.toggleProductReposition(productId, true, 'Alerta de mercadería estancada');
+    StorageService.toggleProductReposition(productId, true, 'Control Diario de Góndola');
     setActionNotice(`"${productName}" añadido a la Lista de Reposición.`);
     setTimeout(() => setActionNotice(null), 3000);
     if (onDataUpdated) {
@@ -167,11 +121,11 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
     <div id="alerts-view" className="p-4 space-y-5 pb-24 max-w-2xl mx-auto select-none">
       {/* Overview Cards Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        {/* Card 1: Mercadería Estancada */}
+        {/* Card 1: Control Diario de Góndola (Disparador 19:00 hs) */}
         <div
-          onClick={() => setFilterTab(filterTab === 'stagnant' ? 'all' : 'stagnant')}
+          onClick={() => setFilterTab(filterTab === 'dailyGondola' ? 'all' : 'dailyGondola')}
           className={`p-4 rounded-3xl border-2 transition-all cursor-pointer shadow-lg flex items-center justify-between ${
-            filterTab === 'stagnant'
+            filterTab === 'dailyGondola'
               ? 'bg-amber-950/40 border-amber-400 ring-2 ring-amber-400/20 shadow-amber-500/10'
               : 'bg-gradient-to-br from-amber-950/20 via-[#1c1815] to-[#12141c] border-amber-500/30 hover:border-amber-400/60'
           }`}
@@ -181,18 +135,18 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
               <Hourglass className="w-5 h-5 animate-pulse" />
             </div>
             <div className="min-w-0">
-              <h3 className="text-xs sm:text-sm font-black text-white truncate">Mercadería Estancada</h3>
-              <p className="text-[11px] text-zinc-400 truncate">Sin rotación en +7 días</p>
+              <h3 className="text-xs sm:text-sm font-black text-white truncate">Control Diario de Góndola</h3>
+              <p className="text-[11px] text-zinc-400 truncate">19:00 hs • Sin ventas 24hs</p>
             </div>
           </div>
           <span
             className={`px-2.5 py-1 rounded-full text-xs font-mono font-black border flex-shrink-0 ${
-              stagnantList.length > 0
+              dailyControlList.length > 0
                 ? 'bg-amber-500 text-black border-amber-400 shadow-md'
                 : 'bg-zinc-800 text-zinc-400 border-zinc-700'
             }`}
           >
-            {stagnantList.length}
+            {dailyControlList.length}
           </span>
         </div>
 
@@ -237,19 +191,19 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
               : 'text-zinc-400 hover:text-white'
           }`}
         >
-          Todas ({stagnantList.length + lowStockList.length})
+          Todas ({dailyControlList.length + lowStockList.length})
         </button>
         <button
           type="button"
-          onClick={() => setFilterTab('stagnant')}
+          onClick={() => setFilterTab('dailyGondola')}
           className={`flex-1 py-1.5 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1 cursor-pointer ${
-            filterTab === 'stagnant'
+            filterTab === 'dailyGondola'
               ? 'bg-amber-500 text-black shadow-md font-black'
               : 'text-amber-300 hover:text-white'
           }`}
         >
-          <span>⏳ Estancados</span>
-          <span className="text-[10px] opacity-80">({stagnantList.length})</span>
+          <span>⏳ Control Diario</span>
+          <span className="text-[10px] opacity-80">({dailyControlList.length})</span>
         </button>
         <button
           type="button"
@@ -273,36 +227,38 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
         </div>
       )}
 
-      {/* REQUIREMENT 2: SECCIÓN DE PRODUCTOS ESTANCADOS / SIN MOVIMIENTO */}
-      {(filterTab === 'all' || filterTab === 'stagnant') && (
+      {/* REQUIREMENT 1 & 2: SECCIÓN "CONTROL DIARIO DE GÓNDOLA" */}
+      {(filterTab === 'all' || filterTab === 'dailyGondola') && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Hourglass className="w-4 h-4 text-amber-400" />
               <h3 className="text-xs font-black text-amber-300 uppercase tracking-wider">
-                Mercadería Estancada (+7 Días Sin Movimiento)
+                Control Diario de Góndola
               </h3>
             </div>
-            <span className="text-[11px] text-zinc-500">Con stock en depósito</span>
+            <span className="text-[11px] text-zinc-400 font-mono">
+              Evaluación diaria 19:00 hs
+            </span>
           </div>
 
-          {stagnantList.length === 0 ? (
+          {dailyControlList.length === 0 ? (
             <div className="p-6 text-center bg-[#161922] border border-white/5 rounded-3xl space-y-1">
               <CheckCircle2 className="w-9 h-9 text-emerald-400 mx-auto opacity-80" />
-              <p className="text-xs sm:text-sm font-bold text-white">¡No hay mercadería estancada!</p>
+              <p className="text-xs sm:text-sm font-bold text-white">¡Góndolas Verificadas y Al Día!</p>
               <p className="text-[11px] text-zinc-400 max-w-sm mx-auto">
-                Todos los productos con stock han tenido movimiento o verificación en góndola en los últimos 7 días.
+                Todos los productos con stock en depósito tuvieron ventas en las últimas 24hs o ya fueron confirmados con "Góndola OK". Próximo control a las 19:00 hs.
               </p>
             </div>
           ) : (
             <div className="space-y-2.5">
-              {stagnantList.map(({ product, daysInactive, stockDesc }) => (
+              {dailyControlList.map(({ product, stockDesc }) => (
                 <div
-                  key={`stagnant-${product.id}`}
-                  id={`stagnant-item-${product.id}`}
+                  key={`daily-gondola-${product.id}`}
+                  id={`daily-gondola-${product.id}`}
                   className="p-3.5 rounded-3xl border-2 border-amber-500/40 bg-gradient-to-r from-amber-950/30 via-[#18161f] to-[#12141c] shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3.5 hover:border-amber-400/70 transition-all"
                 >
-                  {/* Left Column: Product Name, Icon & Abandonment Info */}
+                  {/* Left Column: Product Name, Icon & Requirement 2 Text */}
                   <div className="flex items-center gap-3 flex-1 min-w-0">
                     <div className="w-13 h-13 rounded-2xl bg-white p-1 flex-shrink-0 flex items-center justify-center overflow-hidden border border-white/10 shadow-sm relative">
                       {product.image ? (
@@ -321,24 +277,20 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
                     </div>
 
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        {/* Requirement 2: Nombre con icono de reloj de arena o aviso de inactividad */}
-                        <h4 className="text-xs sm:text-sm font-black text-white truncate flex items-center gap-1.5">
-                          <span className="text-amber-400 flex-shrink-0">⚠️</span>
-                          <span className="truncate">{product.name}</span>
-                        </h4>
-                        <span className="text-[10px] font-mono font-black px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30 flex-shrink-0">
-                          {daysInactive} días sin rotación
-                        </span>
-                      </div>
+                      {/* REQUIREMENT 2: Texto Adaptado en la Tarjeta */}
+                      {/* "⚠️ [Nombre del Producto] - Requiere Verificación Diaria de Góndola. Último movimiento hace más de 24hs. Stock en depósito: X bultos" */}
+                      <h4 className="text-xs sm:text-sm font-black text-white truncate flex items-center gap-1.5">
+                        <span className="text-amber-400 flex-shrink-0">⚠️</span>
+                        <span className="truncate">{product.name}</span>
+                      </h4>
 
-                      {/* Requirement 2: Texto claro indicando el tiempo de abandono */}
-                      <p className="text-xs text-amber-100/90 font-medium mt-1 leading-snug">
-                        Sin movimientos desde hace <strong className="text-amber-300 font-extrabold">{daysInactive} días</strong>. Stock en depósito:{' '}
-                        <strong className="text-white font-extrabold">{stockDesc}</strong>
+                      <p className="text-xs text-amber-100/95 font-medium mt-1 leading-snug">
+                        <span className="text-amber-300 font-bold">Requiere Verificación Diaria de Góndola.</span>{' '}
+                        <span>Último movimiento hace más de 24hs. Stock en depósito:{' '}</span>
+                        <strong className="text-white font-black">{stockDesc}</strong>.
                       </p>
 
-                      <div className="flex items-center gap-2 text-[10px] text-zinc-400 font-mono mt-0.5">
+                      <div className="flex items-center gap-2 text-[10px] text-zinc-400 font-mono mt-1">
                         <span>{getCategoryName(product.category)}</span>
                         <span>•</span>
                         <span>Total: {product.stock} uds</span>
@@ -346,14 +298,14 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
                     </div>
                   </div>
 
-                  {/* Right Column: Requirement 3: Botón "Góndola OK" y Acciones */}
+                  {/* Right Column: REQUIREMENT 3: Botón "Góndola OK" y Acciones */}
                   <div className="flex items-center gap-2 flex-shrink-0 border-t sm:border-t-0 pt-2.5 sm:pt-0 border-white/10">
                     <button
                       type="button"
                       id={`btn-gondola-ok-${product.id}`}
                       onClick={() => handleVerifyGondola(product)}
                       className="py-2.5 px-3.5 rounded-xl bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-xs flex items-center gap-1.5 shadow-md shadow-emerald-600/30 active:scale-95 transition-all cursor-pointer border border-emerald-400/40"
-                      title="Confirmar que la góndola está completa. Pone el contador a cero y oculta la alerta por 7 días."
+                      title="Confirmar revisión de estante. Oculta de inmediato la alerta hasta las 19:00 hs del día siguiente."
                     >
                       <Check className="w-4 h-4 stroke-[3]" />
                       <span>Góndola OK</span>
