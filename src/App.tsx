@@ -135,10 +135,23 @@ export default function App() {
     setMovements(loadedMovements);
     setCategories(loadedCategories);
     setSettings(loadedSettings);
+    setShoppingCount(ShoppingService.getShoppingList().length);
     if (loadedSettings.defaultViewMode) {
       setViewMode(loadedSettings.defaultViewMode);
     }
   };
+
+  const [shoppingCount, setShoppingCount] = useState<number>(() => ShoppingService.getShoppingList().length);
+
+  useEffect(() => {
+    const handleShoppingUpdated = () => {
+      setShoppingCount(ShoppingService.getShoppingList().length);
+    };
+    window.addEventListener('shopping_list_updated', handleShoppingUpdated);
+    return () => {
+      window.removeEventListener('shopping_list_updated', handleShoppingUpdated);
+    };
+  }, []);
 
   // Clock tick every 30s so the 19:00 hs daily trigger updates in real-time
   const [, setClockTick] = useState(0);
@@ -760,6 +773,11 @@ export default function App() {
                 setMovementUnitType('unit');
                 setMovementModalOpen(true);
               }}
+              onOpenBulkAssistant={(prod) => {
+                setMovementProduct(prod);
+                setMovementType('out');
+                setMovementModalOpen(true);
+              }}
               onDataUpdated={reloadAllData}
             />
           )}
@@ -804,6 +822,7 @@ export default function App() {
           onTabChange={setCurrentTab}
           lowStockCount={totalAlertsCount}
           repositionCount={repositionPendingTotal}
+          shoppingCount={shoppingCount}
           onLogout={handleLogout}
           onOpenScanner={() => {
             setScanTarget(null);

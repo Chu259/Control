@@ -22,7 +22,15 @@ export const ShoppingService = {
 
   addToShoppingList(productId: string, customNotes?: string, targetQuantity?: string): ShoppingListItem[] {
     const list = this.getShoppingList();
-    if (!list.some((item) => item.productId === productId)) {
+    const existingIndex = list.findIndex((item) => item.productId === productId);
+    if (existingIndex >= 0) {
+      list[existingIndex] = {
+        ...list[existingIndex],
+        customNotes: customNotes || list[existingIndex].customNotes,
+        targetQuantity: targetQuantity || list[existingIndex].targetQuantity,
+      };
+      this.saveShoppingList(list);
+    } else {
       list.push({
         id: `shop-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         productId,
@@ -32,7 +40,70 @@ export const ShoppingService = {
       });
       this.saveShoppingList(list);
     }
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('shopping_list_updated', { detail: { list } }));
+    }
     return list;
+  },
+
+  addOrUpdateShoppingItem(
+    productId: string,
+    params: {
+      totalUnits: number;
+      bulks?: number;
+      looseUnits?: number;
+      customNotes?: string;
+    }
+  ): { list: ShoppingListItem[]; item: ShoppingListItem } {
+    const list = this.getShoppingList();
+    const existingIndex = list.findIndex((item) => item.productId === productId);
+
+    const b = params.bulks ?? 0;
+    const u = params.looseUnits ?? 0;
+    const totalUnits = params.totalUnits;
+
+    let targetQuantityStr = '';
+    if (b > 0 && u > 0) {
+      targetQuantityStr = `${b} cj y ${u} uds (${totalUnits} uds)`;
+    } else if (b > 0) {
+      targetQuantityStr = `${b} cj (${totalUnits} uds)`;
+    } else {
+      targetQuantityStr = `${totalUnits} uds`;
+    }
+
+    const noteStr =
+      params.customNotes || (b > 0 ? `${b} bultos para proveedor` : `${totalUnits} uds pedidas`);
+
+    let targetItem: ShoppingListItem;
+    if (existingIndex >= 0) {
+      targetItem = {
+        ...list[existingIndex],
+        targetQuantity: targetQuantityStr,
+        customNotes: noteStr,
+      };
+      list[existingIndex] = targetItem;
+    } else {
+      targetItem = {
+        id: `shop-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        productId,
+        targetQuantity: targetQuantityStr,
+        customNotes: noteStr,
+        addedAt: new Date().toISOString(),
+      };
+      list.unshift(targetItem);
+    }
+
+    this.saveShoppingList(list);
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('shopping_list_updated', {
+          detail: { productId, item: targetItem, list },
+        })
+      );
+    }
+
+    return { list, item: targetItem };
   },
 
   removeFromShoppingList(productId: string): ShoppingListItem[] {

@@ -46,9 +46,14 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
   const [catalogSearch, setCatalogSearch] = useState('');
   const [exportMessage, setExportMessage] = useState<string | null>(null);
 
-  // Load shopping list from persistent storage
+  // Load shopping list from persistent storage and keep in sync
   useEffect(() => {
     reloadList();
+    const handleUpdate = () => reloadList();
+    window.addEventListener('shopping_list_updated', handleUpdate);
+    return () => {
+      window.removeEventListener('shopping_list_updated', handleUpdate);
+    };
   }, []);
 
   // Scroll to highlighted product when redirected from ProductDetailModal

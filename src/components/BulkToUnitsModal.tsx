@@ -7,7 +7,10 @@ export interface BulkToUnitsModalProps {
   onClose: () => void;
   onConfirm?: (totalUnits: number) => void;
   onConfirmMovement?: (totalUnits: number, type: 'in' | 'out') => void;
+  onConfirmShopping?: (totalUnits: number, bulks: number, looseUnits: number) => void;
   movementType?: 'in' | 'out'; // When provided, works in Entrada or Salida mode
+  modalTitle?: string;
+  isShoppingMode?: boolean; // When true, tailored for Compras (Supplier order)
   initialUnitsPerBulk?: number;
   bulkUnitName?: string;
   productName?: string;
@@ -223,14 +226,17 @@ export const BulkToUnitsModal: React.FC<BulkToUnitsModalProps> = ({
   onClose,
   onConfirm,
   onConfirmMovement,
+  onConfirmShopping,
   movementType = 'out',
+  modalTitle,
+  isShoppingMode = false,
   initialUnitsPerBulk = 12,
   bulkUnitName = 'Bulto',
   productName,
   currentStock,
 }) => {
-  // Action toggle: default to 'out' (Salida / Venta -)
-  const [currentType, setCurrentType] = useState<'in' | 'out'>('out');
+  // Action toggle: default to 'out' (Salida / Venta -) or prop movementType
+  const [currentType, setCurrentType] = useState<'in' | 'out'>(movementType || 'out');
 
   // Memory cleanup on open: Bultos and loose units reset to empty every time
   const [bultos, setBultos] = useState<string>('');
@@ -248,8 +254,8 @@ export const BulkToUnitsModal: React.FC<BulkToUnitsModalProps> = ({
 
   useEffect(() => {
     if (isOpen) {
-      // Requirement: Por defecto al abrir el asistente, la opción activa debe ser 'Salida (Venta -)'
-      setCurrentType('out');
+      // If movementType is passed, use it (e.g. 'in' for shopping or 'out' for stock out), otherwise default to 'out'
+      setCurrentType(movementType || 'out');
       const upb = initialUnitsPerBulk > 0 ? initialUnitsPerBulk : 12;
       setUnitsPerBulk(String(upb));
       setBultos('');
@@ -263,7 +269,7 @@ export const BulkToUnitsModal: React.FC<BulkToUnitsModalProps> = ({
         }
       }, 100);
     }
-  }, [isOpen, initialUnitsPerBulk]);
+  }, [isOpen, initialUnitsPerBulk, movementType]);
 
   // Handle native Android back button
   useEffect(() => {
@@ -341,7 +347,9 @@ export const BulkToUnitsModal: React.FC<BulkToUnitsModalProps> = ({
     }
     Sound.playSuccessChime();
 
-    if (onConfirmMovement) {
+    if (onConfirmShopping) {
+      onConfirmShopping(calculatedTotal, numBultos, numLooseUnits);
+    } else if (onConfirmMovement) {
       onConfirmMovement(calculatedTotal, currentType);
     } else if (onConfirm) {
       onConfirm(calculatedTotal);
@@ -361,15 +369,25 @@ export const BulkToUnitsModal: React.FC<BulkToUnitsModalProps> = ({
   const isExit = currentType === 'out';
   const isMovement = true;
 
-  const titleText = isEntry
+  const titleText = modalTitle
+    ? modalTitle
+    : isShoppingMode
+    ? 'Asistente de Compras por Bultos'
+    : isEntry
     ? 'Asistente de Entrada por Bultos'
     : 'Asistente de Salida por Bultos';
 
-  const badgeColor = isEntry
+  const badgeColor = isShoppingMode
+    ? 'bg-sky-500/20 text-sky-300 border-sky-500/40'
+    : isEntry
     ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
     : 'bg-zinc-700/80 text-zinc-200 border-zinc-500';
 
-  const badgeText = isEntry ? '+ ENTRADA' : '– SALIDA';
+  const badgeText = isShoppingMode
+    ? '🛒 PEDIDO DE COMPRA'
+    : isEntry
+    ? '+ ENTRADA'
+    : '– SALIDA';
 
   const resultingStock =
     currentStock !== undefined
@@ -456,7 +474,7 @@ export const BulkToUnitsModal: React.FC<BulkToUnitsModalProps> = ({
               }}
               className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
                 currentType === 'out'
-                  ? 'bg-zinc-700 text-white shadow-md border border-zinc-500'
+                  ? 'bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white shadow-lg shadow-rose-600/40 font-black border border-rose-400'
                   : 'bg-white/5 hover:bg-white/10 text-zinc-400 border border-white/10'
               }`}
             >
@@ -475,17 +493,19 @@ export const BulkToUnitsModal: React.FC<BulkToUnitsModalProps> = ({
             </div>
             <div className="flex items-center justify-between pt-1.5 border-t border-white/5">
               <span className="text-xs sm:text-sm font-semibold text-white">
-                {isEntry
+                {isShoppingMode
+                  ? 'Total Unidades a Comprar:'
+                  : isEntry
                   ? 'Total Unidades a Sumar:'
                   : 'Total Unidades a Restar:'}
               </span>
               <div
                 className={`flex items-baseline gap-1 font-mono text-2xl sm:text-3xl font-black ${
-                  isExit ? 'text-zinc-200' : 'text-emerald-400'
+                  isExit && !isShoppingMode ? 'text-rose-400' : 'text-emerald-400'
                 }`}
               >
                 <span>
-                  {isEntry ? '+' : '–'}
+                  {isExit && !isShoppingMode ? '–' : '+'}
                   {calculatedTotal.toLocaleString()}
                 </span>
                 <span className="text-xs font-normal text-zinc-400">uds</span>
@@ -1010,14 +1030,16 @@ export const BulkToUnitsModal: React.FC<BulkToUnitsModalProps> = ({
               type="submit"
               disabled={calculatedTotal <= 0}
               className={`w-full py-3.5 px-4 ${
-                isExit
-                  ? 'bg-zinc-700 hover:bg-zinc-600 active:bg-zinc-800 text-white border border-zinc-500'
-                  : 'bg-[#10b981] hover:bg-[#059669] active:bg-[#047857] text-white'
+                isExit && !isShoppingMode
+                  ? 'bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white shadow-xl shadow-rose-600/40 border border-rose-400'
+                  : 'bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white shadow-xl shadow-emerald-600/30 border border-emerald-400'
               } disabled:opacity-40 font-black text-base sm:text-lg rounded-2xl shadow-xl flex items-center justify-center gap-2 active:scale-95 transition-all cursor-pointer`}
             >
               <Check className="w-6 h-6 stroke-[3]" />
               <span>
-                {isEntry
+                {isShoppingMode
+                  ? `✓ Inyectar a Lista de Compras (+${calculatedTotal.toLocaleString()} uds)`
+                  : isEntry
                   ? `✓ Confirmar Entrada (+${calculatedTotal.toLocaleString()} uds)`
                   : `✓ Confirmar Salida (–${calculatedTotal.toLocaleString()} uds)`}
               </span>

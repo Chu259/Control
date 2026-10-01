@@ -196,7 +196,7 @@ export const StockMovementModal: React.FC<StockMovementModalProps> = ({
               }}
               className={`py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
                 type === 'out'
-                  ? 'bg-zinc-700 text-white shadow-md border border-zinc-500'
+                  ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-md shadow-rose-600/30 font-bold border border-rose-400'
                   : 'text-zinc-400 hover:text-white'
               }`}
             >

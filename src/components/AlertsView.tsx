@@ -17,6 +17,7 @@ import { checkStockAlert } from '../utils/stockAlert';
 import { ShoppingService } from '../services/shoppingService';
 import { StorageService } from '../services/storage';
 import { checkProductDailyGondola, getNext19hs } from '../utils/dailyGondolaControl';
+import { BulkToUnitsModal } from './BulkToUnitsModal';
 
 interface AlertsViewProps {
   products: Product[];
@@ -26,6 +27,7 @@ interface AlertsViewProps {
   currency: string;
   onUpdateSettings: (settings: StoreSettings) => void;
   onQuickRestock: (product: Product) => void;
+  onOpenBulkAssistant?: (product: Product) => void;
   onDataUpdated?: () => void;
 }
 
@@ -37,10 +39,14 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
   currency,
   onUpdateSettings,
   onQuickRestock,
+  onOpenBulkAssistant,
   onDataUpdated,
 }) => {
   const [filterTab, setFilterTab] = useState<'all' | 'dailyGondola' | 'lowStock'>('all');
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [selectedBulkProduct, setSelectedBulkProduct] = useState<Product | null>(null);
+  const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
+  const [shoppingModalProduct, setShoppingModalProduct] = useState<Product | null>(null);
   const [, setTick] = useState(0);
 
   // Periodic tick every 30s so the 19:00 hs trigger and timers stay live with device clock
@@ -97,6 +103,57 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
       `"${product.name}" verificado como Góndola OK. Liberado hasta las 19:00 hs de mañana.`
     );
     setTimeout(() => setActionNotice(null), 4000);
+    if (onDataUpdated) {
+      onDataUpdated();
+    }
+  };
+
+  const handleOpenBulkAssistant = (product: Product) => {
+    Sound.playScanBeep();
+    if (onOpenBulkAssistant) {
+      onOpenBulkAssistant(product);
+    } else {
+      setSelectedBulkProduct(product);
+      setIsBulkModalOpen(true);
+    }
+  };
+
+  // Requirement 1 & 2: Abrir Asistente al Tocar Compras (🛒) precargado en Modo Entrada/Compra
+  const handleOpenShoppingAssistant = (product: Product) => {
+    Sound.playScanBeep();
+    setShoppingModalProduct(product);
+  };
+
+  // Requirement 3: Impactar en la Lista de Compras Real con bultos y unidades
+  const handleConfirmAddToShopping = (
+    product: Product,
+    totalUnits: number,
+    bulks: number,
+    looseUnits: number
+  ) => {
+    const upb = Math.max(1, product.unitsPerBulk || 12);
+    // Inyectar efectivamente el artículo con sus bultos y unidades dentro de la base de datos de Compras
+    ShoppingService.addOrUpdateShoppingItem(product.id, {
+      totalUnits,
+      bulks,
+      looseUnits,
+      customNotes: `Pedido Góndola: ${bulks > 0 ? `${bulks} cj` : ''}${bulks > 0 && looseUnits > 0 ? ' + ' : ''}${looseUnits > 0 ? `${looseUnits} uds` : ''}`.trim(),
+    });
+
+    Sound.playSuccessChime();
+    const qtySummary =
+      bulks > 0 && looseUnits > 0
+        ? `${bulks} bultos y ${looseUnits} uds (${totalUnits} uds)`
+        : bulks > 0
+        ? `${bulks} ${bulks === 1 ? 'bulto' : 'bultos'} (${totalUnits} uds)`
+        : `${totalUnits} uds`;
+
+    setActionNotice(
+      `✓ "${product.name}" inyectado en Lista de Compras: ${qtySummary}.`
+    );
+    setTimeout(() => setActionNotice(null), 4000);
+    setShoppingModalProduct(null);
+
     if (onDataUpdated) {
       onDataUpdated();
     }
@@ -298,27 +355,42 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
                     </div>
                   </div>
 
-                  {/* Right Column: REQUIREMENT 3: Botón "Góndola OK" y Acciones */}
-                  <div className="flex items-center gap-2 flex-shrink-0 border-t sm:border-t-0 pt-2.5 sm:pt-0 border-white/10">
+                  {/* Right Column: REQUIREMENT 3: Botón "Góndola OK", Asistente de Bultos y Carrito */}
+                  <div className="flex items-center gap-1.5 flex-shrink-0 border-t sm:border-t-0 pt-2.5 sm:pt-0 border-white/10">
+                    {/* Botón 1: "Góndola OK" */}
                     <button
                       type="button"
                       id={`btn-gondola-ok-${product.id}`}
                       onClick={() => handleVerifyGondola(product)}
-                      className="py-2.5 px-3.5 rounded-xl bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-xs flex items-center gap-1.5 shadow-md shadow-emerald-600/30 active:scale-95 transition-all cursor-pointer border border-emerald-400/40"
+                      className="py-2 px-3 rounded-xl bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-xs flex items-center gap-1.5 shadow-md shadow-emerald-600/30 active:scale-95 transition-all cursor-pointer border border-emerald-400/40"
                       title="Confirmar revisión de estante. Oculta de inmediato la alerta hasta las 19:00 hs del día siguiente."
                     >
                       <Check className="w-4 h-4 stroke-[3]" />
                       <span>Góndola OK</span>
                     </button>
 
+                    {/* Botón 2: Icono Caja/Bulto (círculos/racimo amarillos actuales): Abre Asistente de Carga por Bultos */}
                     <button
                       type="button"
-                      onClick={() => handleAddReplenish(product.id, product.name)}
-                      className="p-2.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 text-xs font-bold flex items-center gap-1 border border-amber-500/30 transition-colors"
-                      title="Añadir a lista de reposición para llevar al salón"
+                      id={`btn-bulk-assistant-${product.id}`}
+                      onClick={() => handleOpenBulkAssistant(product)}
+                      className="p-2 sm:px-2.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 active:bg-amber-500/35 text-amber-300 text-xs font-bold flex items-center gap-1 border border-amber-500/30 transition-all cursor-pointer shadow-sm"
+                      title="Abrir Asistente de Carga por Bultos precargado con este producto"
                     >
-                      <Boxes className="w-3.5 h-3.5" />
-                      <span className="hidden sm:inline">Reponer</span>
+                      <Boxes className="w-4 h-4" />
+                      <span className="hidden sm:inline">Bultos</span>
+                    </button>
+
+                    {/* Botón 3: Carrito (🛒): Abre Asistente en modo Compra/Entrada para inyectar en Lista de Compras */}
+                    <button
+                      type="button"
+                      id={`btn-shopping-cart-${product.id}`}
+                      onClick={() => handleOpenShoppingAssistant(product)}
+                      className="p-2 sm:px-2.5 rounded-xl bg-sky-500/15 hover:bg-sky-500/25 active:bg-sky-500/35 text-sky-300 text-xs font-bold flex items-center gap-1 border border-sky-500/30 transition-all cursor-pointer shadow-sm"
+                      title="Abrir Asistente de Carga por Bultos en modo Compra para inyectar en la Lista de Compras"
+                    >
+                      <ShoppingCart className="w-4 h-4" />
+                      <span className="hidden sm:inline">Compras</span>
                     </button>
                   </div>
                 </div>
@@ -436,6 +508,67 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
             </div>
           )}
         </div>
+      )}
+
+      {/* Modal Asistente de Carga por Bultos precargado desde alerta de góndola */}
+      {isBulkModalOpen && selectedBulkProduct && (
+        <BulkToUnitsModal
+          isOpen={isBulkModalOpen}
+          onClose={() => {
+            setIsBulkModalOpen(false);
+            setSelectedBulkProduct(null);
+          }}
+          movementType="out"
+          productName={selectedBulkProduct.name}
+          initialUnitsPerBulk={selectedBulkProduct.unitsPerBulk || 12}
+          bulkUnitName={selectedBulkProduct.bulkUnitName || 'Bulto'}
+          currentStock={selectedBulkProduct.stock}
+          onConfirmMovement={(units, type) => {
+            try {
+              const upb = selectedBulkProduct.unitsPerBulk || 12;
+              StorageService.recordStockMovement({
+                productId: selectedBulkProduct.id,
+                type: type,
+                quantity: units,
+                reason: type === 'in' ? 'compra' : 'venta',
+                format: 'bulk',
+                unitType: 'bulk',
+                bulkQuantity: Math.floor(units / upb),
+                notes: 'Desde Alerta de Control Diario de Góndola',
+              });
+              Sound.playSuccessChime();
+              setActionNotice(
+                `✓ Movimiento registrado: ${type === 'in' ? 'Entrada' : 'Salida'} de ${units} uds en "${selectedBulkProduct.name}".`
+              );
+              setTimeout(() => setActionNotice(null), 3500);
+              setIsBulkModalOpen(false);
+              setSelectedBulkProduct(null);
+              if (onDataUpdated) {
+                onDataUpdated();
+              }
+            } catch (e) {
+              console.error(e);
+            }
+          }}
+        />
+      )}
+
+      {/* Requirement 1, 2 & 3: Modal Asistente de Carga por Bultos precargado en Modo Entrada/Compra para Proveedor */}
+      {shoppingModalProduct && (
+        <BulkToUnitsModal
+          isOpen={Boolean(shoppingModalProduct)}
+          onClose={() => setShoppingModalProduct(null)}
+          movementType="in"
+          isShoppingMode={true}
+          modalTitle="Pedido de Compras al Proveedor"
+          productName={shoppingModalProduct.name}
+          initialUnitsPerBulk={shoppingModalProduct.unitsPerBulk || 12}
+          bulkUnitName={shoppingModalProduct.bulkUnitName || 'Bulto'}
+          currentStock={shoppingModalProduct.stock}
+          onConfirmShopping={(totalUnits, bulks, looseUnits) => {
+            handleConfirmAddToShopping(shoppingModalProduct, totalUnits, bulks, looseUnits);
+          }}
+        />
       )}
     </div>
   );

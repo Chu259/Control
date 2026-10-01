@@ -27,6 +27,7 @@ interface NavigationMenuProps {
   onTabChange: (tab: AppTab) => void;
   lowStockCount: number;
   repositionCount?: number;
+  shoppingCount?: number;
   onOpenScanner: () => void;
   onOpenNewProduct: () => void;
   onQuickMovementOpen: (type: 'in' | 'out') => void;
@@ -38,6 +39,7 @@ export const NavigationMenu: React.FC<NavigationMenuProps> = ({
   onTabChange,
   lowStockCount,
   repositionCount,
+  shoppingCount,
   onOpenScanner,
   onOpenNewProduct,
   onQuickMovementOpen,
@@ -50,7 +52,7 @@ export const NavigationMenu: React.FC<NavigationMenuProps> = ({
     { id: 'inventory', label: 'Stock', icon: LayoutGrid },
     { id: 'dummies', label: 'Ráfaga Dummies', icon: Zap },
     { id: 'replenishment', label: 'Reposición', icon: Boxes, badge: repositionCount },
-    { id: 'shopping', label: 'Compras', icon: ShoppingCart },
+    { id: 'shopping', label: 'Compras', icon: ShoppingCart, badge: shoppingCount },
     { id: 'movements', label: 'Movimientos', icon: ArrowUpDown },
     { id: 'alerts', label: 'Alertas', icon: Bell, badge: lowStockCount },
   ];

@@ -978,7 +978,7 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
                         onClick={() => setMovementTypeFor(product.id, 'out')}
                         className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
                           currentType === 'out'
-                            ? 'bg-zinc-700 text-white shadow-md border border-zinc-500'
+                            ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-md shadow-rose-600/30 font-bold border border-rose-400'
                             : 'bg-white/5 hover:bg-white/10 text-zinc-400 border border-white/10'
                         }`}
                       >
@@ -1005,7 +1005,7 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
                     className={`w-full py-2.5 px-4 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg transition-all active:scale-[0.98] disabled:opacity-50 cursor-pointer ${
                       currentType === 'in'
                         ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/25'
-                        : 'bg-zinc-700 hover:bg-zinc-600 text-white border border-zinc-500 shadow-md'
+                        : 'bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white shadow-lg shadow-rose-600/30 border border-rose-400'
                     }`}
                   >
                     {currentType === 'in' ? (
