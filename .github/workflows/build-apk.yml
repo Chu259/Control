@@ -75,6 +75,7 @@ jobs:
         alias: mi-alias
         keyStorePassword: claveDepos123
         keyPassword: claveDepos123
+        buildToolsVersion: 34.0.0
 
     - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
