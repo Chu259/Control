@@ -1,4 +1,5 @@
 import { Product, ShoppingListItem, ReplenishmentItem } from '../types';
+import { CloudBackupService } from './cloudBackupService';
 
 const SHOPPING_STORAGE_KEY = 'inventario_shopping_list_v1';
 const REPLENISHMENT_STORAGE_KEY = 'inventario_replenishment_list_v1';
@@ -141,6 +142,7 @@ export const ShoppingService = {
 
   saveReplenishmentList(items: ReplenishmentItem[]): void {
     localStorage.setItem(REPLENISHMENT_STORAGE_KEY, JSON.stringify(items));
+    CloudBackupService.triggerAutoBackup();
   },
 
   addToReplenishmentList(

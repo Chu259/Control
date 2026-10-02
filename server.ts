@@ -584,6 +584,82 @@ async function startServer() {
     });
   });
 
+  // ==========================================
+  // INVISIBLE CLOUD BACKUP & DISASTER RECOVERY
+  // ==========================================
+  const CLOUD_BACKUPS_DIR = path.join(process.cwd(), '.cloud_backups');
+  if (!fs.existsSync(CLOUD_BACKUPS_DIR)) {
+    try {
+      fs.mkdirSync(CLOUD_BACKUPS_DIR, { recursive: true });
+    } catch {}
+  }
+
+  // POST /api/cloud-backup: Receives background invisible snapshot
+  app.post('/api/cloud-backup', (req, res) => {
+    try {
+      const payload = req.body;
+      if (!payload || !payload.data) {
+        return res.status(400).json({ error: 'Payload de respaldo incompleto' });
+      }
+
+      const now = new Date().toISOString();
+      const latestFile = path.join(CLOUD_BACKUPS_DIR, 'backup_latest.json');
+      fs.writeFileSync(latestFile, JSON.stringify(payload, null, 2), 'utf-8');
+
+      // Also maintain daily rotation snapshot
+      const dateTag = now.slice(0, 10);
+      const dailyFile = path.join(CLOUD_BACKUPS_DIR, `backup_${dateTag}.json`);
+      fs.writeFileSync(dailyFile, JSON.stringify(payload, null, 2), 'utf-8');
+
+      res.json({
+        success: true,
+        timestamp: now,
+        itemsCount: payload.data?.products?.length || 0,
+        message: 'Respaldo en la nube completado con éxito.',
+      });
+    } catch (err: any) {
+      console.error('Error saving cloud backup:', err);
+      res.status(500).json({ error: err?.message || 'Error al persistir respaldo en la nube' });
+    }
+  });
+
+  // GET /api/cloud-backup/latest: Retrieve latest cloud backup snapshot
+  app.get('/api/cloud-backup/latest', (req, res) => {
+    try {
+      const latestFile = path.join(CLOUD_BACKUPS_DIR, 'backup_latest.json');
+      if (!fs.existsSync(latestFile)) {
+        return res.status(404).json({ error: 'No existe copia previa en la nube' });
+      }
+      const content = fs.readFileSync(latestFile, 'utf-8');
+      res.setHeader('Content-Type', 'application/json');
+      res.send(content);
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Error al leer respaldo de la nube' });
+    }
+  });
+
+  // GET /api/cloud-backup/status
+  app.get('/api/cloud-backup/status', (req, res) => {
+    try {
+      const latestFile = path.join(CLOUD_BACKUPS_DIR, 'backup_latest.json');
+      if (!fs.existsSync(latestFile)) {
+        return res.json({ available: false });
+      }
+      const stat = fs.statSync(latestFile);
+      const raw = fs.readFileSync(latestFile, 'utf-8');
+      const parsed = JSON.parse(raw);
+      res.json({
+        available: true,
+        lastModified: stat.mtime.toISOString(),
+        sizeKB: Math.round(stat.size / 1024),
+        productCount: parsed.data?.products?.length || 0,
+        storeName: parsed.storeName || 'depos',
+      });
+    } catch (e: any) {
+      res.json({ available: false, error: e?.message });
+    }
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({

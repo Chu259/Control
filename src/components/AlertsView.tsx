@@ -10,6 +10,8 @@ import {
   ShoppingCart,
   Boxes,
   Sparkles,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { Product, StoreSettings, StockMovement, Category } from '../types';
 import { Sound } from '../services/sound';
@@ -27,7 +29,6 @@ interface AlertsViewProps {
   currency: string;
   onUpdateSettings: (settings: StoreSettings) => void;
   onQuickRestock: (product: Product) => void;
-  onOpenBulkAssistant?: (product: Product) => void;
   onDataUpdated?: () => void;
 }
 
@@ -39,13 +40,11 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
   currency,
   onUpdateSettings,
   onQuickRestock,
-  onOpenBulkAssistant,
   onDataUpdated,
 }) => {
   const [filterTab, setFilterTab] = useState<'all' | 'dailyGondola' | 'lowStock'>('all');
   const [actionNotice, setActionNotice] = useState<string | null>(null);
-  const [selectedBulkProduct, setSelectedBulkProduct] = useState<Product | null>(null);
-  const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
+  const [repositionModalProduct, setRepositionModalProduct] = useState<Product | null>(null);
   const [shoppingModalProduct, setShoppingModalProduct] = useState<Product | null>(null);
   const [, setTick] = useState(0);
 
@@ -93,6 +92,52 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
     return found ? found.name : 'General';
   };
 
+  // Agrupación automática de alertas por Pasillo / Categoría heredando colores ("Código de Barco")
+  const aisleGroups = React.useMemo(() => {
+    const map = new Map<string, { category: Category; items: typeof dailyControlList }>();
+
+    for (const item of dailyControlList) {
+      const catId = item.product.category || 'pasillo-1';
+      const cat = categories.find((c) => c.id === catId) || {
+        id: catId,
+        name: catId.startsWith('pasillo-')
+          ? `Pasillo ${catId.replace('pasillo-', '')}`
+          : catId === 'all'
+          ? 'Pasillo General'
+          : catId,
+        color: '#0ea5e9',
+      };
+
+      if (!map.has(cat.id)) {
+        map.set(cat.id, { category: cat, items: [] });
+      }
+      map.get(cat.id)!.items.push(item);
+    }
+
+    return Array.from(map.values()).sort((a, b) => {
+      const idxA = categories.findIndex((c) => c.id === a.category.id);
+      const idxB = categories.findIndex((c) => c.id === b.category.id);
+      if (idxA >= 0 && idxB >= 0) return idxA - idxB;
+      return a.category.name.localeCompare(b.category.name);
+    });
+  }, [dailyControlList, categories]);
+
+  // Estado de pasillos desplegados / colapsados
+  const [expandedAisles, setExpandedAisles] = useState<Record<string, boolean>>({});
+
+  // Desplegar pasillos automáticamente al cargar o actualizar
+  React.useEffect(() => {
+    setExpandedAisles((prev) => {
+      const next = { ...prev };
+      aisleGroups.forEach((g) => {
+        if (next[g.category.id] === undefined) {
+          next[g.category.id] = true;
+        }
+      });
+      return next;
+    });
+  }, [aisleGroups]);
+
   // REQUIREMENT 3: Reinicio con "Góndola OK"
   // Al presionarlo, el empleado confirma que revisó el estante,
   // la alerta se oculta de inmediato y queda liberado hasta las 19:00 hs del día siguiente.
@@ -108,13 +153,58 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
     }
   };
 
-  const handleOpenBulkAssistant = (product: Product) => {
+  // Requirement 1, 2 & 3: Asistente en modo "Carga de Reposición" (Bultos y Unidades para Góndola)
+  const handleOpenRepositionAssistant = (product: Product) => {
     Sound.playScanBeep();
-    if (onOpenBulkAssistant) {
-      onOpenBulkAssistant(product);
-    } else {
-      setSelectedBulkProduct(product);
-      setIsBulkModalOpen(true);
+    setRepositionModalProduct(product);
+  };
+
+  const handleConfirmAddToReposition = (
+    product: Product,
+    totalUnits: number,
+    bulks: number,
+    looseUnits: number
+  ) => {
+    const unitsPerBulk = Math.max(1, product.unitsPerBulk || 12);
+    // Acumulación prolija si ya tenía reposición pendiente
+    const existingBulks = product.isPendingReposition ? (product.repositionBulks || 0) : 0;
+    const existingUnits = product.isPendingReposition ? (product.repositionUnits || 0) : 0;
+    const accumulatedBulks = existingBulks + bulks;
+    const accumulatedUnits = existingUnits + looseUnits;
+    const accumulatedTotalUnits = (accumulatedBulks * unitsPerBulk) + accumulatedUnits;
+
+    // 1. Inyectar directamente dentro de la lista de la pestaña 'Reposición'
+    StorageService.toggleProductReposition(
+      product.id,
+      true,
+      `Carga Góndola: ${accumulatedBulks > 0 ? `${accumulatedBulks} cj` : ''}${accumulatedBulks > 0 && accumulatedUnits > 0 ? ' + ' : ''}${accumulatedUnits > 0 ? `${accumulatedUnits} uds` : ''}`.trim(),
+      accumulatedTotalUnits,
+      accumulatedBulks,
+      accumulatedUnits
+    );
+
+    // 2. Automáticamente ocultar la alerta de control de góndola de ese producto
+    StorageService.verifyProductGondola(
+      product.id,
+      `Verificado: Carga de Reposición enviada (${bulks} cj, ${looseUnits} uds)`
+    );
+
+    Sound.playSuccessChime();
+    const qtySummary =
+      bulks > 0 && looseUnits > 0
+        ? `${bulks} bultos y ${looseUnits} uds (${totalUnits} uds)`
+        : bulks > 0
+        ? `${bulks} ${bulks === 1 ? 'bulto' : 'bultos'} (${totalUnits} uds)`
+        : `${totalUnits} uds`;
+
+    setActionNotice(
+      `✓ "${product.name}" enviado a Reposición: ${qtySummary}. Alerta de góndola completada.`
+    );
+    setTimeout(() => setActionNotice(null), 4000);
+    setRepositionModalProduct(null);
+
+    if (onDataUpdated) {
+      onDataUpdated();
     }
   };
 
@@ -308,93 +398,173 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
               </p>
             </div>
           ) : (
-            <div className="space-y-2.5">
-              {dailyControlList.map(({ product, stockDesc }) => (
-                <div
-                  key={`daily-gondola-${product.id}`}
-                  id={`daily-gondola-${product.id}`}
-                  className="p-3.5 rounded-3xl border-2 border-amber-500/40 bg-gradient-to-r from-amber-950/30 via-[#18161f] to-[#12141c] shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3.5 hover:border-amber-400/70 transition-all"
-                >
-                  {/* Left Column: Product Name, Icon & Requirement 2 Text */}
-                  <div className="flex items-center gap-3 flex-1 min-w-0">
-                    <div className="w-13 h-13 rounded-2xl bg-white p-1 flex-shrink-0 flex items-center justify-center overflow-hidden border border-white/10 shadow-sm relative">
-                      {product.image ? (
-                        <img
-                          src={product.image}
-                          alt={product.name}
-                          referrerPolicy="no-referrer"
-                          className="max-h-full max-w-full object-contain"
+            <div className="space-y-3">
+              {aisleGroups.map(({ category, items }) => {
+                const isExpanded = expandedAisles[category.id] ?? true;
+                const catColor = category.color || '#0ea5e9';
+
+                return (
+                  <div
+                    key={`aisle-acc-${category.id}`}
+                    id={`aisle-acc-${category.id}`}
+                    className="space-y-2"
+                  >
+                    {/* Botón Acordeón Desplegable del Pasillo con Color Dinámico (Código de Barco) */}
+                    <button
+                      type="button"
+                      id={`btn-toggle-aisle-${category.id}`}
+                      onClick={() => {
+                        Sound.playScanBeep();
+                        setExpandedAisles((prev) => ({
+                          ...prev,
+                          [category.id]: !isExpanded,
+                        }));
+                      }}
+                      style={{
+                        borderColor: `${catColor}80`,
+                        backgroundColor: `${catColor}14`,
+                      }}
+                      className="w-full p-3.5 rounded-2xl border-2 shadow-md flex items-center justify-between transition-all hover:brightness-110 active:scale-[0.99] cursor-pointer"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        {/* Indicador Náutico / Código de Barco */}
+                        <span
+                          className="w-3.5 h-3.5 rounded-full flex-shrink-0 shadow-sm"
+                          style={{ backgroundColor: catColor, boxShadow: `0 0 10px ${catColor}` }}
                         />
-                      ) : (
-                        <Package className="w-6 h-6 text-zinc-400" />
-                      )}
-                      <div className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-amber-500 text-black flex items-center justify-center text-[9px] font-black shadow">
-                        ⏳
+                        <span className="text-sm font-black text-white truncate flex items-center gap-1.5">
+                          <span>🚪</span>
+                          <span>{category.name}</span>
+                        </span>
+                        <span
+                          className="px-2 py-0.5 rounded-full text-xs font-mono font-black"
+                          style={{
+                            backgroundColor: `${catColor}30`,
+                            color: '#ffffff',
+                            border: `1px solid ${catColor}60`,
+                          }}
+                        >
+                          [{items.length}]
+                        </span>
                       </div>
-                    </div>
 
-                    <div className="flex-1 min-w-0">
-                      {/* REQUIREMENT 2: Texto Adaptado en la Tarjeta */}
-                      {/* "⚠️ [Nombre del Producto] - Requiere Verificación Diaria de Góndola. Último movimiento hace más de 24hs. Stock en depósito: X bultos" */}
-                      <h4 className="text-xs sm:text-sm font-black text-white truncate flex items-center gap-1.5">
-                        <span className="text-amber-400 flex-shrink-0">⚠️</span>
-                        <span className="truncate">{product.name}</span>
-                      </h4>
-
-                      <p className="text-xs text-amber-100/95 font-medium mt-1 leading-snug">
-                        <span className="text-amber-300 font-bold">Requiere Verificación Diaria de Góndola.</span>{' '}
-                        <span>Último movimiento hace más de 24hs. Stock en depósito:{' '}</span>
-                        <strong className="text-white font-black">{stockDesc}</strong>.
-                      </p>
-
-                      <div className="flex items-center gap-2 text-[10px] text-zinc-400 font-mono mt-1">
-                        <span>{getCategoryName(product.category)}</span>
-                        <span>•</span>
-                        <span>Total: {product.stock} uds</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[11px] text-zinc-400 font-medium hidden sm:inline">
+                          {items.length === 1 ? '1 pendiente' : `${items.length} pendientes`}
+                        </span>
+                        <div
+                          className="w-7 h-7 rounded-xl flex items-center justify-center text-white"
+                          style={{ backgroundColor: `${catColor}30` }}
+                        >
+                          {isExpanded ? (
+                            <ChevronUp className="w-4 h-4 stroke-[2.5]" />
+                          ) : (
+                            <ChevronDown className="w-4 h-4 stroke-[2.5]" />
+                          )}
+                        </div>
                       </div>
-                    </div>
+                    </button>
+
+                    {/* Tarjetas Desplegadas del Pasillo */}
+                    {isExpanded && (
+                      <div
+                        className="space-y-2.5 pl-2 sm:pl-3 border-l-2 ml-2 sm:ml-3"
+                        style={{ borderColor: `${catColor}50` }}
+                      >
+                        {items.map(({ product, stockDesc }) => (
+                          <div
+                            key={`daily-gondola-${product.id}`}
+                            id={`daily-gondola-${product.id}`}
+                            className="p-3.5 rounded-3xl border-2 border-amber-500/40 bg-gradient-to-r from-amber-950/30 via-[#18161f] to-[#12141c] shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3.5 hover:border-amber-400/70 transition-all"
+                          >
+                            {/* Left Column: Product Name, Icon & Requirement 2 Text */}
+                            <div className="flex items-center gap-3 flex-1 min-w-0">
+                              <div className="w-13 h-13 rounded-2xl bg-white p-1 flex-shrink-0 flex items-center justify-center overflow-hidden border border-white/10 shadow-sm relative">
+                                {product.image ? (
+                                  <img
+                                    src={product.image}
+                                    alt={product.name}
+                                    referrerPolicy="no-referrer"
+                                    className="max-h-full max-w-full object-contain"
+                                  />
+                                ) : (
+                                  <Package className="w-6 h-6 text-zinc-400" />
+                                )}
+                                <div className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-amber-500 text-black flex items-center justify-center text-[9px] font-black shadow">
+                                  ⏳
+                                </div>
+                              </div>
+
+                              <div className="flex-1 min-w-0">
+                                <h4 className="text-xs sm:text-sm font-black text-white truncate flex items-center gap-1.5">
+                                  <span className="text-amber-400 flex-shrink-0">⚠️</span>
+                                  <span className="truncate">{product.name}</span>
+                                </h4>
+
+                                <p className="text-xs text-amber-100/95 font-medium mt-1 leading-snug">
+                                  <span className="text-amber-300 font-bold">Requiere Verificación Diaria de Góndola.</span>{' '}
+                                  <span>Último movimiento hace más de 24hs. Stock en depósito:{' '}</span>
+                                  <strong className="text-white font-black">{stockDesc}</strong>.
+                                </p>
+
+                                <div className="flex items-center gap-2 text-[10px] text-zinc-400 font-mono mt-1">
+                                  <span
+                                    className="px-1.5 py-0.2 rounded font-semibold"
+                                    style={{ color: catColor }}
+                                  >
+                                    {category.name}
+                                  </span>
+                                  <span>•</span>
+                                  <span>Total: {product.stock} uds</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Right Column: REQUIREMENT 3: Botón "Góndola OK", Asistente de Bultos y Carrito */}
+                            <div className="flex items-center gap-1.5 flex-shrink-0 border-t sm:border-t-0 pt-2.5 sm:pt-0 border-white/10">
+                              {/* Botón 1: "Góndola OK" */}
+                              <button
+                                type="button"
+                                id={`btn-gondola-ok-${product.id}`}
+                                onClick={() => handleVerifyGondola(product)}
+                                className="py-2 px-3 rounded-xl bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-xs flex items-center gap-1.5 shadow-md shadow-emerald-600/30 active:scale-95 transition-all cursor-pointer border border-emerald-400/40"
+                                title="Confirmar revisión de estante. Oculta de inmediato la alerta hasta las 19:00 hs del día siguiente."
+                              >
+                                <Check className="w-4 h-4 stroke-[3]" />
+                                <span>Góndola OK</span>
+                              </button>
+
+                              {/* Botón 2: Icono Caja/Bulto (círculos/racimo amarillos actuales): Abre Asistente en modo Carga de Reposición */}
+                              <button
+                                type="button"
+                                id={`btn-bulk-assistant-${product.id}`}
+                                onClick={() => handleOpenRepositionAssistant(product)}
+                                className="p-2 sm:px-2.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 active:bg-amber-500/35 text-amber-300 text-xs font-bold flex items-center gap-1 border border-amber-500/30 transition-all cursor-pointer shadow-sm"
+                                title="Abrir Asistente en modo Carga de Reposición para enviar bultos y unidades a la lista de Reposición"
+                              >
+                                <Boxes className="w-4 h-4" />
+                                <span className="hidden sm:inline">Bultos</span>
+                              </button>
+
+                              {/* Botón 3: Carrito (🛒): Abre Asistente en modo Compra/Entrada para inyectar en Lista de Compras */}
+                              <button
+                                type="button"
+                                id={`btn-shopping-cart-${product.id}`}
+                                onClick={() => handleOpenShoppingAssistant(product)}
+                                className="p-2 sm:px-2.5 rounded-xl bg-sky-500/15 hover:bg-sky-500/25 active:bg-sky-500/35 text-sky-300 text-xs font-bold flex items-center gap-1 border border-sky-500/30 transition-all cursor-pointer shadow-sm"
+                                title="Abrir Asistente de Carga por Bultos en modo Compra para inyectar en la Lista de Compras"
+                              >
+                                <ShoppingCart className="w-4 h-4" />
+                                <span className="hidden sm:inline">Compras</span>
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
-
-                  {/* Right Column: REQUIREMENT 3: Botón "Góndola OK", Asistente de Bultos y Carrito */}
-                  <div className="flex items-center gap-1.5 flex-shrink-0 border-t sm:border-t-0 pt-2.5 sm:pt-0 border-white/10">
-                    {/* Botón 1: "Góndola OK" */}
-                    <button
-                      type="button"
-                      id={`btn-gondola-ok-${product.id}`}
-                      onClick={() => handleVerifyGondola(product)}
-                      className="py-2 px-3 rounded-xl bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-xs flex items-center gap-1.5 shadow-md shadow-emerald-600/30 active:scale-95 transition-all cursor-pointer border border-emerald-400/40"
-                      title="Confirmar revisión de estante. Oculta de inmediato la alerta hasta las 19:00 hs del día siguiente."
-                    >
-                      <Check className="w-4 h-4 stroke-[3]" />
-                      <span>Góndola OK</span>
-                    </button>
-
-                    {/* Botón 2: Icono Caja/Bulto (círculos/racimo amarillos actuales): Abre Asistente de Carga por Bultos */}
-                    <button
-                      type="button"
-                      id={`btn-bulk-assistant-${product.id}`}
-                      onClick={() => handleOpenBulkAssistant(product)}
-                      className="p-2 sm:px-2.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 active:bg-amber-500/35 text-amber-300 text-xs font-bold flex items-center gap-1 border border-amber-500/30 transition-all cursor-pointer shadow-sm"
-                      title="Abrir Asistente de Carga por Bultos precargado con este producto"
-                    >
-                      <Boxes className="w-4 h-4" />
-                      <span className="hidden sm:inline">Bultos</span>
-                    </button>
-
-                    {/* Botón 3: Carrito (🛒): Abre Asistente en modo Compra/Entrada para inyectar en Lista de Compras */}
-                    <button
-                      type="button"
-                      id={`btn-shopping-cart-${product.id}`}
-                      onClick={() => handleOpenShoppingAssistant(product)}
-                      className="p-2 sm:px-2.5 rounded-xl bg-sky-500/15 hover:bg-sky-500/25 active:bg-sky-500/35 text-sky-300 text-xs font-bold flex items-center gap-1 border border-sky-500/30 transition-all cursor-pointer shadow-sm"
-                      title="Abrir Asistente de Carga por Bultos en modo Compra para inyectar en la Lista de Compras"
-                    >
-                      <ShoppingCart className="w-4 h-4" />
-                      <span className="hidden sm:inline">Compras</span>
-                    </button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -510,45 +680,19 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
         </div>
       )}
 
-      {/* Modal Asistente de Carga por Bultos precargado desde alerta de góndola */}
-      {isBulkModalOpen && selectedBulkProduct && (
+      {/* Modal Asistente de Carga de Reposición por Bultos precargado desde alerta de góndola */}
+      {repositionModalProduct && (
         <BulkToUnitsModal
-          isOpen={isBulkModalOpen}
-          onClose={() => {
-            setIsBulkModalOpen(false);
-            setSelectedBulkProduct(null);
-          }}
-          movementType="out"
-          productName={selectedBulkProduct.name}
-          initialUnitsPerBulk={selectedBulkProduct.unitsPerBulk || 12}
-          bulkUnitName={selectedBulkProduct.bulkUnitName || 'Bulto'}
-          currentStock={selectedBulkProduct.stock}
-          onConfirmMovement={(units, type) => {
-            try {
-              const upb = selectedBulkProduct.unitsPerBulk || 12;
-              StorageService.recordStockMovement({
-                productId: selectedBulkProduct.id,
-                type: type,
-                quantity: units,
-                reason: type === 'in' ? 'compra' : 'venta',
-                format: 'bulk',
-                unitType: 'bulk',
-                bulkQuantity: Math.floor(units / upb),
-                notes: 'Desde Alerta de Control Diario de Góndola',
-              });
-              Sound.playSuccessChime();
-              setActionNotice(
-                `✓ Movimiento registrado: ${type === 'in' ? 'Entrada' : 'Salida'} de ${units} uds en "${selectedBulkProduct.name}".`
-              );
-              setTimeout(() => setActionNotice(null), 3500);
-              setIsBulkModalOpen(false);
-              setSelectedBulkProduct(null);
-              if (onDataUpdated) {
-                onDataUpdated();
-              }
-            } catch (e) {
-              console.error(e);
-            }
+          isOpen={Boolean(repositionModalProduct)}
+          onClose={() => setRepositionModalProduct(null)}
+          isRepositionMode={true}
+          modalTitle="Carga de Reposición por Bultos"
+          productName={repositionModalProduct.name}
+          initialUnitsPerBulk={repositionModalProduct.unitsPerBulk || 12}
+          bulkUnitName={repositionModalProduct.bulkUnitName || 'Bulto'}
+          currentStock={repositionModalProduct.stock}
+          onConfirmReposition={(totalUnits, bulks, looseUnits) => {
+            handleConfirmAddToReposition(repositionModalProduct, totalUnits, bulks, looseUnits);
           }}
         />
       )}

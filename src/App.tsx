@@ -34,7 +34,9 @@ import { UserLoginModal } from './components/UserLoginModal';
 import { WelcomeLoginScreen } from './components/WelcomeLoginScreen';
 import { CategoryManagerModal } from './components/CategoryManagerModal';
 import { NavigationMenu } from './components/NavigationMenu';
-import { AlertTriangle, Hourglass, PackageX, Plus, RefreshCw, Smartphone, Sparkles } from 'lucide-react';
+import { ExpirationsView } from './components/ExpirationsView';
+import { ExpirationService } from './services/expirationService';
+import { AlertTriangle, Hourglass, PackageX, Plus, RefreshCw, Smartphone, Sparkles, AlertOctagon } from 'lucide-react';
 import { App as CapApp } from '@capacitor/app';
 import { Sound } from './services/sound';
 import { checkStockAlert } from './utils/stockAlert';
@@ -155,11 +157,20 @@ export default function App() {
 
   // Clock tick every 30s so the 19:00 hs daily trigger updates in real-time
   const [, setClockTick] = useState(0);
+  const [alarmState, setAlarmState] = useState(() => ExpirationService.checkStrictAlarms());
+
   useEffect(() => {
-    const timer = setInterval(() => {
+    const updateAlarmsAndClock = () => {
       setClockTick((t) => t + 1);
-    }, 30000);
-    return () => clearInterval(timer);
+      setAlarmState(ExpirationService.checkStrictAlarms());
+    };
+    updateAlarmsAndClock();
+    const timer = setInterval(updateAlarmsAndClock, 15000);
+    window.addEventListener('expirations_updated', updateAlarmsAndClock);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('expirations_updated', updateAlarmsAndClock);
+    };
   }, []);
 
   // Low stock counter (Dual alert: unidad o bulto por debajo del mínimo)
@@ -545,6 +556,58 @@ export default function App() {
           />
         )}
 
+        {/* Control Matutino (10:00 a. m.): Alerta grande y fija en la pantalla principal */}
+        {alarmState.isMorningActive && alarmState.todayDueItems.length > 0 && currentTab !== 'dummies' && (
+          <div className="sticky top-0 z-30 bg-gradient-to-r from-amber-600 via-rose-600 to-amber-700 text-white p-3 shadow-xl border-b border-white/20 animate-fade-in">
+            <div className="flex items-start gap-2.5">
+              <span className="text-xl animate-bounce">⚠️</span>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-black uppercase tracking-wider text-amber-100 flex items-center gap-1.5">
+                    CONTROL MATUTINO (10:00 A. M.)
+                  </h4>
+                  <button
+                    type="button"
+                    onClick={() => setCurrentTab('expirations')}
+                    className="px-2 py-0.5 bg-black/40 hover:bg-black/60 text-amber-200 text-[10px] font-bold rounded-lg border border-amber-400/30"
+                  >
+                    Ver en Agenda
+                  </button>
+                </div>
+
+                <div className="mt-2 space-y-2">
+                  {alarmState.todayDueItems.map((item) => (
+                    <div
+                      key={item.id}
+                      className="bg-black/40 border border-white/10 rounded-xl p-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+                    >
+                      <div>
+                        <p className="text-xs font-bold text-white leading-snug">
+                          ⚠️ ALERTA DE VENCIMIENTO HOY: <span className="text-amber-300 font-extrabold">{item.productName}</span> vence hoy. Retirar o poner en oferta.
+                        </p>
+                        <p className="text-[10px] text-amber-200/80 font-mono mt-0.5">
+                          Código: {item.barcode} {item.aisleName ? `• ${item.aisleName}` : ''}
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          ExpirationService.resolveExpiration(item.id, 'Producto Retirado / Góndola Verificada');
+                          setAlarmState(ExpirationService.checkStrictAlarms());
+                        }}
+                        className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-black text-[11px] font-black rounded-lg shadow-sm flex items-center justify-center gap-1.5 transition-all active:scale-95 flex-shrink-0"
+                      >
+                        ✔ Producto Retirado / Góndola Verificada
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Tab Content */}
         <main className={`flex-1 ${currentTab === 'dummies' ? 'overflow-hidden' : 'overflow-y-auto'}`}>
           {currentTab === 'dummies' && (
@@ -773,11 +836,6 @@ export default function App() {
                 setMovementUnitType('unit');
                 setMovementModalOpen(true);
               }}
-              onOpenBulkAssistant={(prod) => {
-                setMovementProduct(prod);
-                setMovementType('out');
-                setMovementModalOpen(true);
-              }}
               onDataUpdated={reloadAllData}
             />
           )}
@@ -812,6 +870,20 @@ export default function App() {
               onUserChanged={(u) => setCurrentUser(u)}
               onOpenLoginModal={() => setUserLoginModalOpen(true)}
               onScanSearch={handleOpenSearchScannerFor}
+            />
+          )}
+
+          {currentTab === 'expirations' && (
+            <ExpirationsView
+              products={products}
+              onDataUpdated={reloadAllData}
+              onNavigateToProduct={(pId) => {
+                const found = products.find((p) => p.id === pId);
+                if (found) {
+                  setDetailProduct(found);
+                  setDetailModalOpen(true);
+                }
+              }}
             />
           )}
         </main>
@@ -953,6 +1025,69 @@ export default function App() {
           mode={scannerMode}
           scanTarget={scanTarget}
         />
+
+        {/* Cierre de Jornada (20:00 hs): Bloqueo obligatorio de pantalla con confirmación */}
+        {alarmState.isClosingActive && alarmState.todayDueItems.length > 0 && (
+          <div className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in">
+            <div className="w-full max-w-md bg-[#161922] border-2 border-rose-500 rounded-3xl p-5 shadow-2xl space-y-4 text-center animate-scale-up">
+              <div className="w-16 h-16 rounded-2xl bg-rose-500/20 border-2 border-rose-500 text-rose-400 mx-auto flex items-center justify-center animate-pulse">
+                <AlertOctagon className="w-8 h-8" />
+              </div>
+
+              <div>
+                <span className="text-[11px] font-black uppercase tracking-widest text-rose-400 bg-rose-500/10 px-3 py-1 rounded-full border border-rose-500/30">
+                  CIERRE DE JORNADA (20:00 HS)
+                </span>
+                <h3 className="text-base font-black text-white mt-2">
+                  BLOQUEO OBLIGATORIO: CONTROL DE VENCIMIENTOS
+                </h3>
+                <p className="text-xs text-zinc-300 mt-1">
+                  La pantalla permanecerá bloqueada hasta verificar y retirar los artículos vencidos de góndola para limpiar el sistema para el día siguiente.
+                </p>
+              </div>
+
+              <div className="max-h-60 overflow-y-auto space-y-2 text-left bg-black/40 p-3 rounded-2xl border border-white/5">
+                {alarmState.todayDueItems.map((item) => (
+                  <div key={item.id} className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 space-y-2">
+                    <div>
+                      <p className="text-xs font-bold text-white leading-snug">
+                        ⚠️ ALERTA DE VENCIMIENTO HOY: <span className="text-rose-300 font-extrabold">{item.productName}</span> vence hoy. Retirar o poner en oferta.
+                      </p>
+                      <p className="text-[10px] text-zinc-400 font-mono mt-0.5">
+                        Código: {item.barcode} {item.aisleName ? `• ${item.aisleName}` : ''}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        ExpirationService.resolveExpiration(item.id, 'Producto Retirado / Góndola Verificada');
+                        setAlarmState(ExpirationService.checkStrictAlarms());
+                      }}
+                      className="w-full py-2.5 bg-emerald-500 hover:bg-emerald-400 text-black text-xs font-black rounded-xl shadow-lg flex items-center justify-center gap-1.5 transition-all active:scale-95"
+                    >
+                      ✔ Producto Retirado / Góndola Verificada
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              {alarmState.todayDueItems.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    alarmState.todayDueItems.forEach((it) => {
+                      ExpirationService.resolveExpiration(it.id, 'Producto Retirado / Góndola Verificada');
+                    });
+                    setAlarmState(ExpirationService.checkStrictAlarms());
+                  }}
+                  className="w-full py-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-black rounded-2xl shadow-xl active:scale-95 transition-all"
+                >
+                  ✔ Confirmar Todos Retirados / Góndola Verificada
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -2,6 +2,7 @@ import { Product, StockMovement, Category, StoreSettings, MovementType, Movement
 import { INITIAL_PRODUCTS, INITIAL_CATEGORIES, INITIAL_SETTINGS } from '../data/initialData';
 import { AuthService } from './authService';
 import { ShoppingService } from './shoppingService';
+import { CloudBackupService } from './cloudBackupService';
 
 const STORAGE_KEYS = {
   PRODUCTS: 'stock_app_products_v1',
@@ -131,6 +132,7 @@ export const StorageService = {
       };
     });
     localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(normalized));
+    CloudBackupService.triggerAutoBackup();
   },
 
   saveProduct(product: Product): Product[] {
@@ -329,6 +331,8 @@ export const StorageService = {
       );
     }
 
+    CloudBackupService.triggerAutoBackup();
+
     return { product: { ...product }, bulksPending: currentBulks, unitsPending: currentUnits, totalUnits };
   },
 
@@ -498,6 +502,8 @@ export const StorageService = {
       );
     }
 
+    CloudBackupService.triggerAutoBackup();
+
     return { ...product };
   },
 
@@ -613,6 +619,9 @@ export const StorageService = {
     const updatedMovements = [movement, ...movements].slice(0, 500); // keep recent 500
     this.saveMovements(updatedMovements);
 
+    // Escudo Antivuelco: Respaldo automático invisible en segundo plano
+    CloudBackupService.triggerAutoBackup();
+
     return { product: updatedProduct, movement };
   },
 
@@ -671,6 +680,8 @@ export const StorageService = {
     const movements = this.getMovements();
     const updatedMovements = [movement, ...movements].slice(0, 500);
     this.saveMovements(updatedMovements);
+
+    CloudBackupService.triggerAutoBackup();
 
     return { product: updatedProduct, movement };
   },

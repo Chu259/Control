@@ -1,4 +1,7 @@
 import { Product, StockMovement, StoreSettings } from '../types';
+import { Share } from '@capacitor/share';
+import { Filesystem, Directory } from '@capacitor/filesystem';
+import { Capacitor } from '@capacitor/core';
 
 export interface ReportOptions {
   includeLowStockOnly?: boolean;
@@ -441,3 +444,70 @@ export async function shareImageFile(file: File, title: string): Promise<boolean
   }
   return false;
 }
+
+/**
+ * Native Android sharing using @capacitor/share and @capacitor/filesystem
+ * Writes the base64 JPG to Cache directory and invokes the native Android Share sheet
+ * allowing immediate sharing to WhatsApp, Gmail, Drive, Quick Share, or saving to Gallery.
+ */
+export async function shareReportNative(
+  report: GeneratedReportImage,
+  title: string = 'Balance de Existencias'
+): Promise<{ success: boolean; method: string }> {
+  const isNative = Capacitor.isNativePlatform();
+
+  if (isNative) {
+    try {
+      // 1. Strip DataURL header to get raw base64 data
+      const base64Data = report.dataUrl.includes(',')
+        ? report.dataUrl.split(',')[1]
+        : report.dataUrl;
+
+      // 2. Write file to Cache directory using Capacitor Filesystem
+      const savedFile = await Filesystem.writeFile({
+        path: report.filename,
+        data: base64Data,
+        directory: Directory.Cache,
+      });
+
+      // 3. Open Android Native Share Intent with the file URI
+      await Share.share({
+        title,
+        text: `Reporte y Balance de Existencias - ${title}`,
+        files: [savedFile.uri],
+        url: savedFile.uri,
+        dialogTitle: 'Compartir Reporte de Existencias (JPG)',
+      });
+
+      return { success: true, method: 'capacitor_native' };
+    } catch (err: any) {
+      console.warn('Native Capacitor share error, attempting fallback:', err);
+      // If user simply closed/canceled the share sheet, treat as clean exit
+      const msg = err?.message || String(err);
+      if (msg.includes('canceled') || msg.includes('cancelled') || msg.includes('abort') || msg.includes('dismissed')) {
+        return { success: true, method: 'cancelled_by_user' };
+      }
+    }
+  }
+
+  // Fallback for Web browser preview / dev environment: Web Share API if supported
+  if (typeof navigator !== 'undefined' && navigator.canShare && navigator.canShare({ files: [report.file] })) {
+    try {
+      await navigator.share({
+        files: [report.file],
+        title,
+        text: `Reporte y Balance de Existencias - ${title}`,
+      });
+      return { success: true, method: 'web_share' };
+    } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        return { success: true, method: 'cancelled_by_user' };
+      }
+    }
+  }
+
+  // Fallback if neither native nor web share files is available: trigger download
+  downloadImageFile(report.blob, report.filename);
+  return { success: true, method: 'download_fallback' };
+}
+

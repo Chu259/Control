@@ -172,6 +172,19 @@ export interface SyncPayload {
   newProductsAlerts?: string[];
 }
 
+export interface ExpirationItem {
+  id: string;
+  productId: string;
+  productName: string;
+  barcode: string;
+  expirationDate: string; // YYYY-MM-DD
+  aisleName?: string;
+  status: 'pending' | 'resolved'; // 'resolved' when confirmed as "Producto Retirado / Góndola Verificada"
+  registeredAt: string;
+  resolvedAt?: string;
+  notes?: string;
+}
+
 export interface StoreSettings {
   storeName: string;
   currencySymbol: string;
@@ -179,6 +192,13 @@ export interface StoreSettings {
   defaultMinStock: number;
   pushConfig: PushNotificationConfig;
   syncConfig?: DeviceSyncConfig;
+  githubBackupConfig?: {
+    token?: string;
+    repo?: string;
+    branch?: string;
+    path?: string;
+    enabled?: boolean;
+  };
 }
 
 export type AppTab =
@@ -192,5 +212,6 @@ export type AppTab =
   | 'reports'
   | 'sync'
   | 'users'
-  | 'settings';
+  | 'settings'
+  | 'expirations';
 export type ViewMode = 'grid-small' | 'grid-large' | 'list';
