@@ -643,74 +643,31 @@ export const SyncService = {
         };
       }
 
-      const payload: SyncPayload = JSON.parse(trimmed);
-      if (!payload.products || !Array.isArray(payload.products)) {
-        return { success: false, message: 'El archivo o texto no contiene una lista de inventario válida.' };
+      // Run intelligent barcode fusion, timestamp movement deduplication, and mathematical stock recalculation
+      const importResult = StorageService.importBackup(trimmed);
+      if (!importResult.success) {
+        return {
+          success: false,
+          message: importResult.message,
+        };
       }
 
-      // Requirement 1 & 2: Safely combine existing local catalog with incoming products and localPendingProducts
-      const currentProducts = StorageService.getProducts();
-      const currentMap = new Map<string, Product>();
-      currentProducts.forEach((p) => currentMap.set(p.id, p));
-
-      const incomingList = [...payload.products];
-      if (Array.isArray(payload.localPendingProducts)) {
-        for (const lp of payload.localPendingProducts) {
-          if (!incomingList.some((p) => p.id === lp.id)) {
-            incomingList.push(lp);
-          }
-        }
-      }
-
-      let newItemsCount = 0;
-      for (const item of incomingList) {
-        const existing = currentMap.get(item.id);
-        if (existing) {
-          currentMap.set(item.id, {
-            ...existing,
-            ...item,
-            // Preserve existing product photo if incoming payload has no image (due to size optimization)
-            image: item.image || existing.image,
-            stock: payload.role === 'master' ? item.stock : existing.stock,
-          });
-        } else {
-          const isFromClient = payload.role === 'client' || item.isNewFromUser;
-          currentMap.set(item.id, {
-            ...item,
-            isNewFromUser: isFromClient,
-            reviewedByAdmin: !isFromClient,
-            addedByDeviceId: item.addedByDeviceId || payload.deviceId,
-            addedByDeviceName: item.addedByDeviceName || payload.deviceName,
-            addedByUserName: item.addedByUserName || payload.userName || 'Usuario',
-          });
-          newItemsCount++;
-        }
-      }
-
-      const mergedProducts = Array.from(currentMap.values());
-      StorageService.saveProducts(mergedProducts);
-      if (payload.categories) StorageService.saveCategories(payload.categories);
-      if (payload.movements) StorageService.saveMovements(payload.movements);
-      if (payload.shoppingList) ShoppingService.mergeShoppingList(payload.shoppingList);
-      if (payload.replenishmentList) ShoppingService.mergeReplenishmentList(payload.replenishmentList);
-
-      const config = this.getDeviceConfig();
-      this.saveDeviceConfig({
-        ...config,
-        syncCode: payload.storeCode || config.syncCode,
-        lastSyncTimestamp: new Date().toISOString(),
-      });
-
-      let summary = `Se procesaron ${mergedProducts.length} productos con éxito.`;
-      if (newItemsCount > 0) {
-        summary += ` Se incorporaron ${newItemsCount} producto(s) nuevo(s) del dispositivo emisor.`;
-      }
+      // Update sync configuration timestamp
+      try {
+        const payload = JSON.parse(trimmed);
+        const config = this.getDeviceConfig();
+        this.saveDeviceConfig({
+          ...config,
+          syncCode: payload.storeCode || payload.syncCode || config.syncCode,
+          lastSyncTimestamp: new Date().toISOString(),
+        });
+      } catch {}
 
       return {
         success: true,
-        message: summary,
-        count: mergedProducts.length,
-        newProductsCount: newItemsCount,
+        message: importResult.message,
+        count: importResult.mergedProductsCount,
+        newProductsCount: importResult.recalculatedCount,
       };
     } catch (e: any) {
       const errStr = e?.message || '';

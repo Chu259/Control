@@ -185,13 +185,10 @@ export const CloudBackupService = {
       const dataStr = JSON.stringify(body.data);
       const imported = StorageService.importBackup(dataStr);
 
-      if (imported) {
-        if (body.data.expirations && Array.isArray(body.data.expirations)) {
-          localStorage.setItem('depos_expiration_agenda', JSON.stringify(body.data.expirations));
-        }
-        return { success: true, message: '¡Datos restaurados con éxito desde la nube!' };
+      if (imported.success) {
+        return { success: true, message: imported.message || '¡Datos restaurados con éxito desde la nube!' };
       }
-      return { success: false, message: 'El formato de los datos no es válido.' };
+      return { success: false, message: imported.message || 'El formato de los datos no es válido.' };
     } catch (err: any) {
       return { success: false, message: err?.message || 'Error al conectar con la nube.' };
     }

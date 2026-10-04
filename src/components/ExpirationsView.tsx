@@ -625,45 +625,116 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
               </div>
             </div>
 
-            {/* Quick preset chips */}
-            <div className="flex flex-wrap items-center gap-1.5 pt-1">
-              <span className="text-[10px] text-zinc-400 font-semibold mr-1">Atajos:</span>
-              <button
-                type="button"
-                onClick={() => applyPreset(0, true)}
-                className="px-2 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-[10px] text-zinc-300 border border-white/10"
-              >
-                Fin este mes
-              </button>
-              <button
-                type="button"
-                onClick={() => applyPreset(1, true)}
-                className="px-2 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-[10px] text-zinc-300 border border-white/10"
-              >
-                +1 Mes
-              </button>
-              <button
-                type="button"
-                onClick={() => applyPreset(2, true)}
-                className="px-2 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-[10px] text-zinc-300 border border-white/10"
-              >
-                +2 Meses
-              </button>
-              <button
-                type="button"
-                onClick={() => applyPreset(3, true)}
-                className="px-2 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-[10px] text-zinc-300 border border-white/10"
-              >
-                +3 Meses
-              </button>
-              <button
-                type="button"
-                onClick={() => applyPreset(6, true)}
-                className="px-2 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-[10px] text-zinc-300 border border-white/10"
-              >
-                +6 Meses
-              </button>
-            </div>
+            {/* Quick preset buttons: 3 atajos dinámicos de fecha basados en el reloj del dispositivo */}
+            {(() => {
+              const SPANISH_MONTHS = [
+                'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+                'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'
+              ];
+              const now = new Date();
+              const curYear = now.getFullYear();
+              const curMonthIdx = now.getMonth();
+
+              // Botón 1: "Este Mes" -> último día del mes actual (Ej: 31 de Octubre)
+              const curMonthLastDay = new Date(curYear, curMonthIdx + 1, 0).getDate();
+              const curMonthName = SPANISH_MONTHS[curMonthIdx];
+
+              // Botón 2: "Mes Próximo" -> último día del mes entrante (Ej: 30 de Noviembre)
+              const nextMonthDate = new Date(curYear, curMonthIdx + 1, 1);
+              const nextYear = nextMonthDate.getFullYear();
+              const nextMonthIdx = nextMonthDate.getMonth();
+              const nextMonthLastDay = new Date(nextYear, nextMonthIdx + 1, 0).getDate();
+              const nextMonthName = SPANISH_MONTHS[nextMonthIdx];
+
+              // Botón 3: "1ra Sem. Siguiente" -> día 7 del mes subsiguiente (Ej: 7 de Diciembre) como margen de seguridad
+              const followMonthDate = new Date(curYear, curMonthIdx + 2, 1);
+              const followYear = followMonthDate.getFullYear();
+              const followMonthIdx = followMonthDate.getMonth();
+              const followDay = 7;
+              const followMonthName = SPANISH_MONTHS[followMonthIdx];
+
+              const isBtn1Active = selectedYear === curYear && selectedMonth === (curMonthIdx + 1) && selectedDay === curMonthLastDay;
+              const isBtn2Active = selectedYear === nextYear && selectedMonth === (nextMonthIdx + 1) && selectedDay === nextMonthLastDay;
+              const isBtn3Active = selectedYear === followYear && selectedMonth === (followMonthIdx + 1) && selectedDay === followDay;
+
+              return (
+                <div className="space-y-1.5 pt-1">
+                  <span className="text-[10px] text-zinc-400 font-semibold block">
+                    Atajos Dinámicos (Control Mensual):
+                  </span>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    {/* Botón 1: Este Mes */}
+                    <button
+                      type="button"
+                      id="btn-shortcut-este-mes"
+                      onClick={() => {
+                        setSelectedYear(curYear);
+                        setSelectedMonth(curMonthIdx + 1);
+                        setSelectedDay(curMonthLastDay);
+                      }}
+                      className={`p-2 rounded-xl text-left border transition-all flex flex-col justify-between ${
+                        isBtn1Active
+                          ? 'bg-amber-500/20 border-amber-400 text-amber-200 shadow-md ring-1 ring-amber-400/50'
+                          : 'bg-white/[0.04] hover:bg-white/[0.08] border-white/10 text-zinc-300'
+                      }`}
+                    >
+                      <span className="text-xs font-bold leading-tight">
+                        Este Mes ({curMonthName})
+                      </span>
+                      <span className="text-[10px] text-amber-400/90 font-mono mt-0.5">
+                        Fija: {curMonthLastDay} de {curMonthName}
+                      </span>
+                    </button>
+
+                    {/* Botón 2: Mes Próximo */}
+                    <button
+                      type="button"
+                      id="btn-shortcut-mes-proximo"
+                      onClick={() => {
+                        setSelectedYear(nextYear);
+                        setSelectedMonth(nextMonthIdx + 1);
+                        setSelectedDay(nextMonthLastDay);
+                      }}
+                      className={`p-2 rounded-xl text-left border transition-all flex flex-col justify-between ${
+                        isBtn2Active
+                          ? 'bg-teal-500/20 border-teal-400 text-teal-200 shadow-md ring-1 ring-teal-400/50'
+                          : 'bg-white/[0.04] hover:bg-white/[0.08] border-white/10 text-zinc-300'
+                      }`}
+                    >
+                      <span className="text-xs font-bold leading-tight">
+                        Mes Próximo ({nextMonthName})
+                      </span>
+                      <span className="text-[10px] text-teal-300/90 font-mono mt-0.5">
+                        Fija: {nextMonthLastDay} de {nextMonthName}
+                      </span>
+                    </button>
+
+                    {/* Botón 3: 1ra Sem. Siguiente */}
+                    <button
+                      type="button"
+                      id="btn-shortcut-1ra-sem-siguiente"
+                      onClick={() => {
+                        setSelectedYear(followYear);
+                        setSelectedMonth(followMonthIdx + 1);
+                        setSelectedDay(followDay);
+                      }}
+                      className={`p-2 rounded-xl text-left border transition-all flex flex-col justify-between ${
+                        isBtn3Active
+                          ? 'bg-indigo-500/20 border-indigo-400 text-indigo-200 shadow-md ring-1 ring-indigo-400/50'
+                          : 'bg-white/[0.04] hover:bg-white/[0.08] border-white/10 text-zinc-300'
+                      }`}
+                    >
+                      <span className="text-xs font-bold leading-tight">
+                        1ra Sem. Siguiente ({followMonthName})
+                      </span>
+                      <span className="text-[10px] text-indigo-300/90 font-mono mt-0.5">
+                        Fija: {followDay} de {followMonthName} (Margen)
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Optional note input */}
             <div>

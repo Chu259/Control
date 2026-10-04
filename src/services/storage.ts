@@ -867,28 +867,367 @@ export const StorageService = {
       movements: this.getMovements(),
       categories: this.getCategories(),
       settings: this.getSettings(),
+      expirations: (() => {
+        try {
+          return JSON.parse(localStorage.getItem('depos_expiration_agenda') || '[]');
+        } catch {
+          return [];
+        }
+      })(),
+      replenishmentList: ShoppingService.getReplenishmentList(),
+      shoppingList: ShoppingService.getShoppingList(),
     };
     return JSON.stringify(bundle, null, 2);
   },
 
-  importBackup(jsonString: string): boolean {
+  /**
+   * Recálculo Matemático Obligatorio de Existencias (Fix Talco):
+   * Recalcula el stock neto real sumando todas las entradas y restando todas las salidas
+   * que figuren en la lista de movimientos unificada de cada producto.
+   * Esto actualiza los casilleros superiores de Total Unidades y Bultos Cerrados.
+   */
+  recalculateStockFromMovements(
+    customProducts?: Product[],
+    customMovements?: StockMovement[]
+  ): { products: Product[]; updatedCount: number } {
+    const products = customProducts ? [...customProducts] : this.getProducts();
+    const movements = customMovements ? [...customMovements] : this.getMovements();
+
+    let updatedCount = 0;
+
+    // Index movements by productId and by barcodes
+    const movementsByProduct = new Map<string, StockMovement[]>();
+    for (const m of movements) {
+      if (!m.productId) continue;
+      const list = movementsByProduct.get(m.productId) || [];
+      list.push(m);
+      movementsByProduct.set(m.productId, list);
+    }
+
+    const updatedProducts = products.map((p) => {
+      // Find all movements matching this product either by ID or barcode
+      const directMovements = movementsByProduct.get(p.id) || [];
+      const cleanBarUnit = (p.barcodeUnit || '').trim().toLowerCase();
+      const cleanBar = (p.barcode || '').trim().toLowerCase();
+      const cleanBarBulk = (p.barcodeBulk || '').trim().toLowerCase();
+
+      const barcodeMovements = movements.filter((m) => {
+        if (m.productId === p.id) return false;
+        const mBar = (m.barcode || '').trim().toLowerCase();
+        const mScan = (m.barcodeScanned || '').trim().toLowerCase();
+        return (
+          (cleanBarUnit && (mBar === cleanBarUnit || mScan === cleanBarUnit)) ||
+          (cleanBar && (mBar === cleanBar || mScan === cleanBar)) ||
+          (cleanBarBulk && (mBar === cleanBarBulk || mScan === cleanBarBulk))
+        );
+      });
+
+      const allProdMovements = [...directMovements, ...barcodeMovements];
+      const unitsPerBulk = Math.max(1, Number(p.unitsPerBulk) || 12);
+
+      if (allProdMovements.length > 0) {
+        let inSum = 0;
+        let outSum = 0;
+        for (const m of allProdMovements) {
+          const qty = Number(m.quantity) || 0;
+          if (m.type === 'in') {
+            inSum += qty;
+          } else if (m.type === 'out') {
+            outSum += qty;
+          }
+        }
+        const netStock = Math.max(0, inSum - outSum);
+        if (p.stock !== netStock) {
+          updatedCount++;
+        }
+        return {
+          ...p,
+          stock: netStock,
+          unitsPerBulk,
+          bulkUnitName: p.bulkUnitName || `Caja x${unitsPerBulk}`,
+          lastUpdated: new Date().toISOString(),
+        };
+      }
+
+      return {
+        ...p,
+        stock: Math.max(0, Number(p.stock) || 0),
+        unitsPerBulk,
+        bulkUnitName: p.bulkUnitName || `Caja x${unitsPerBulk}`,
+      };
+    });
+
+    if (!customProducts) {
+      this.saveProducts(updatedProducts);
+    }
+
+    return { products: updatedProducts, updatedCount };
+  },
+
+  /**
+   * Importación JSON con Fusión Inteligente de Historiales y Recálculo de Existencias (Fix Talco):
+   * - No sobreescribe ciegamente la base de datos local.
+   * - Compara productos por código de barras (barcodeUnit, barcode, barcodeBulk).
+   * - Fusiona historiales de Movimientos Recientes cruzando fechas y horas (timestamps) sin duplicados.
+   * - Ejecuta el recálculo matemático de entradas y salidas unificadas para actualizar Total Unidades y Bultos Cerrados.
+   */
+  importBackup(jsonString: string): {
+    success: boolean;
+    message: string;
+    mergedProductsCount: number;
+    mergedMovementsCount: number;
+    recalculatedCount: number;
+  } {
     try {
-      const bundle = JSON.parse(jsonString);
-      if (bundle.products && Array.isArray(bundle.products)) {
-        this.saveProducts(bundle.products);
+      const trimmed = (jsonString || '').trim();
+      if (!trimmed) {
+        return {
+          success: false,
+          message: 'El texto JSON está vacío. Pega o carga un contenido válido.',
+          mergedProductsCount: 0,
+          mergedMovementsCount: 0,
+          recalculatedCount: 0,
+        };
       }
-      if (bundle.movements && Array.isArray(bundle.movements)) {
-        this.saveMovements(bundle.movements);
+
+      const rawParsed = JSON.parse(trimmed);
+      const bundle = rawParsed.data ? rawParsed.data : rawParsed;
+
+      let incomingProducts: Product[] = [];
+      if (Array.isArray(bundle.products)) {
+        incomingProducts = [...bundle.products];
+      } else if (Array.isArray(bundle)) {
+        incomingProducts = [...bundle];
       }
-      if (bundle.categories && Array.isArray(bundle.categories)) {
-        this.saveCategories(bundle.categories);
+
+      if (Array.isArray(bundle.localPendingProducts)) {
+        for (const lp of bundle.localPendingProducts) {
+          if (!incomingProducts.some((p) => p.id === lp.id)) {
+            incomingProducts.push(lp);
+          }
+        }
       }
-      if (bundle.settings) {
-        this.saveSettings(bundle.settings);
+
+      const incomingMovements: StockMovement[] = Array.isArray(bundle.movements)
+        ? bundle.movements
+        : [];
+
+      if (incomingProducts.length === 0 && incomingMovements.length === 0) {
+        return {
+          success: false,
+          message: 'No se encontraron productos ni movimientos en el archivo o texto pegado.',
+          mergedProductsCount: 0,
+          mergedMovementsCount: 0,
+          recalculatedCount: 0,
+        };
       }
-      return true;
-    } catch {
-      return false;
+
+      const localProducts = this.getProducts();
+      const localMovements = this.getMovements();
+
+      const cleanCode = (c?: string) => (c || '').trim().toLowerCase();
+
+      // Index existing local products by barcodes and ID
+      const barcodeToLocalProduct = new Map<string, Product>();
+      const idToLocalProduct = new Map<string, Product>();
+
+      for (const lp of localProducts) {
+        idToLocalProduct.set(lp.id, lp);
+        if (cleanCode(lp.barcodeUnit)) barcodeToLocalProduct.set(cleanCode(lp.barcodeUnit), lp);
+        if (cleanCode(lp.barcode)) barcodeToLocalProduct.set(cleanCode(lp.barcode), lp);
+        if (cleanCode(lp.barcodeBulk)) barcodeToLocalProduct.set(cleanCode(lp.barcodeBulk), lp);
+      }
+
+      const idMapping = new Map<string, string>(); // incoming.id -> target unified ID
+      const unifiedProductsMap = new Map<string, Product>();
+      localProducts.forEach((lp) => unifiedProductsMap.set(lp.id, { ...lp }));
+
+      // Step 1: Intelligent Product Merging (Fusión inteligente de productos por código de barras)
+      for (const inc of incomingProducts) {
+        const incUnit = cleanCode(inc.barcodeUnit);
+        const incBar = cleanCode(inc.barcode);
+        const incBulk = cleanCode(inc.barcodeBulk);
+
+        let matched =
+          (incUnit && barcodeToLocalProduct.get(incUnit)) ||
+          (incBar && barcodeToLocalProduct.get(incBar)) ||
+          (incBulk && barcodeToLocalProduct.get(incBulk)) ||
+          idToLocalProduct.get(inc.id);
+
+        if (!matched && !incUnit && !incBar && inc.name) {
+          const incName = inc.name.trim().toLowerCase();
+          matched = localProducts.find((p) => p.name.trim().toLowerCase() === incName);
+        }
+
+        if (matched) {
+          const targetId = matched.id;
+          idMapping.set(inc.id, targetId);
+
+          const existingInMap = unifiedProductsMap.get(targetId) || matched;
+          const unitsPerBulk = Math.max(1, Number(existingInMap.unitsPerBulk || inc.unitsPerBulk || 12));
+
+          const merged: Product = {
+            ...existingInMap,
+            name: existingInMap.name || inc.name,
+            barcode: existingInMap.barcode || inc.barcode || inc.barcodeUnit,
+            barcodeUnit: existingInMap.barcodeUnit || inc.barcodeUnit || inc.barcode,
+            barcodeBulk: existingInMap.barcodeBulk || inc.barcodeBulk,
+            unitsPerBulk,
+            bulkUnitName: existingInMap.bulkUnitName || inc.bulkUnitName || `Caja x${unitsPerBulk}`,
+            category: existingInMap.category || inc.category || 'General',
+            costPrice: Number(existingInMap.costPrice || inc.costPrice || 0),
+            sellingPrice: Number(existingInMap.sellingPrice || inc.sellingPrice || 0),
+            costPriceBulk: Number(existingInMap.costPriceBulk || inc.costPriceBulk || 0),
+            sellingPriceBulk: Number(existingInMap.sellingPriceBulk || inc.sellingPriceBulk || 0),
+            // Preservar fotos locales si existen, o tomar la entrante
+            image: existingInMap.image || inc.image,
+            suggestedGondolaQuantity: existingInMap.suggestedGondolaQuantity || inc.suggestedGondolaQuantity,
+            minStockAlert: existingInMap.minStockAlert || inc.minStockAlert || 5,
+            minStockAlertUnit: existingInMap.minStockAlertUnit || inc.minStockAlertUnit,
+            minStockAlertBulk: existingInMap.minStockAlertBulk || inc.minStockAlertBulk,
+            unit: existingInMap.unit || inc.unit || 'uds',
+            notes: existingInMap.notes || inc.notes,
+            lastVerifiedAt: existingInMap.lastVerifiedAt || inc.lastVerifiedAt,
+            lastUpdated: new Date().toISOString(),
+          };
+
+          unifiedProductsMap.set(targetId, merged);
+        } else {
+          // Producto nuevo proveniente del otro teléfono
+          const newId = inc.id || `prod-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+          idMapping.set(inc.id, newId);
+
+          const unitsPerBulk = Math.max(1, Number(inc.unitsPerBulk) || 12);
+          const newProd: Product = {
+            ...inc,
+            id: newId,
+            unitsPerBulk,
+            bulkUnitName: inc.bulkUnitName || `Caja x${unitsPerBulk}`,
+            barcode: inc.barcodeUnit || inc.barcode,
+            barcodeUnit: inc.barcodeUnit || inc.barcode,
+            lastUpdated: new Date().toISOString(),
+          };
+
+          unifiedProductsMap.set(newId, newProd);
+          if (cleanCode(newProd.barcodeUnit)) barcodeToLocalProduct.set(cleanCode(newProd.barcodeUnit), newProd);
+          if (cleanCode(newProd.barcode)) barcodeToLocalProduct.set(cleanCode(newProd.barcode), newProd);
+          if (cleanCode(newProd.barcodeBulk)) barcodeToLocalProduct.set(cleanCode(newProd.barcodeBulk), newProd);
+          idToLocalProduct.set(newId, newProd);
+        }
+      }
+
+      // Step 2: Intelligent Movement Merging (fusión cruzando fechas y horas timestamps para no duplicar)
+      const mergedMovements: StockMovement[] = [...localMovements];
+
+      for (const rawM of incomingMovements) {
+        const targetProdId = idMapping.get(rawM.productId) || rawM.productId;
+        const normalizedM: StockMovement = {
+          ...rawM,
+          productId: targetProdId,
+        };
+
+        const mTime = new Date(normalizedM.timestamp).getTime();
+
+        const isDuplicate = mergedMovements.some((existingM) => {
+          if (existingM.id && normalizedM.id && existingM.id === normalizedM.id) {
+            return true;
+          }
+          if (
+            existingM.productId === normalizedM.productId &&
+            existingM.type === normalizedM.type &&
+            Number(existingM.quantity) === Number(normalizedM.quantity)
+          ) {
+            const eTime = new Date(existingM.timestamp).getTime();
+            if (existingM.timestamp === normalizedM.timestamp || Math.abs(eTime - mTime) < 3000) {
+              return true;
+            }
+          }
+          return false;
+        });
+
+        if (!isDuplicate) {
+          mergedMovements.push(normalizedM);
+        }
+      }
+
+      // Ordenar por fecha descendente
+      mergedMovements.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+      // Step 3: Recálculo Matemático Obligatorio de Existencias (Fix Talco)
+      const unifiedProductsList = Array.from(unifiedProductsMap.values());
+      const { products: finalProducts, updatedCount } = this.recalculateStockFromMovements(
+        unifiedProductsList,
+        mergedMovements
+      );
+
+      // Persistir catálogo y movimientos actualizados
+      this.saveProducts(finalProducts);
+      this.saveMovements(mergedMovements.slice(0, 1000));
+
+      // Fusión opcional de categorías
+      if (Array.isArray(bundle.categories)) {
+        const currentCats = this.getCategories();
+        for (const cat of bundle.categories) {
+          if (!currentCats.some((c) => c.id === cat.id || c.name.toLowerCase() === cat.name.toLowerCase())) {
+            currentCats.push(cat);
+          }
+        }
+        this.saveCategories(currentCats);
+      }
+
+      // Fusión opcional de expiraciones
+      if (Array.isArray(bundle.expirations)) {
+        try {
+          const rawExp = localStorage.getItem('depos_expiration_agenda');
+          const currentExp: any[] = rawExp ? JSON.parse(rawExp) : [];
+          for (const exp of bundle.expirations) {
+            const targetExpProdId = idMapping.get(exp.productId) || exp.productId;
+            if (
+              !currentExp.some(
+                (e) =>
+                  e.id === exp.id ||
+                  (e.productId === targetExpProdId && e.expirationDate === exp.expirationDate)
+              )
+            ) {
+              currentExp.push({ ...exp, productId: targetExpProdId });
+            }
+          }
+          localStorage.setItem('depos_expiration_agenda', JSON.stringify(currentExp));
+          window.dispatchEvent(new CustomEvent('expirations_updated', { detail: currentExp }));
+        } catch {}
+      }
+
+      // Fusión opcional de reposición y compras
+      if (Array.isArray(bundle.replenishmentList)) {
+        try {
+          ShoppingService.mergeReplenishmentList(bundle.replenishmentList);
+        } catch {}
+      }
+      if (Array.isArray(bundle.shoppingList)) {
+        try {
+          ShoppingService.mergeShoppingList(bundle.shoppingList);
+        } catch {}
+      }
+
+      // Respaldo silencioso en la nube
+      CloudBackupService.triggerAutoBackup();
+
+      return {
+        success: true,
+        message: `¡Fusión inteligente completada! Se unificaron ${finalProducts.length} productos y ${mergedMovements.length} movimientos. Se recalcularon las existencias de ${updatedCount} artículo(s) de acuerdo al historial unificado.`,
+        mergedProductsCount: finalProducts.length,
+        mergedMovementsCount: mergedMovements.length,
+        recalculatedCount: updatedCount,
+      };
+    } catch (e: any) {
+      console.error('Error in importBackup:', e);
+      return {
+        success: false,
+        message: 'Error al procesar el archivo o texto JSON: ' + (e?.message || e),
+        mergedProductsCount: 0,
+        mergedMovementsCount: 0,
+        recalculatedCount: 0,
+      };
     }
   },
 

@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Store, ShieldCheck, Download, Upload, RotateCcw, Save, CheckCircle2, Lock, Tag, Plus, Bell, Volume2, AlertTriangle, Send, Sparkles } from 'lucide-react';
+import { Store, ShieldCheck, Download, Upload, RotateCcw, Save, CheckCircle2, Lock, Tag, Plus, Bell, Volume2, AlertTriangle, Send, Sparkles, ClipboardPaste, X } from 'lucide-react';
 import { StoreSettings, Category, Product } from '../types';
 import { StorageService } from '../services/storage';
 import { NotificationService } from '../services/pushNotifications';
@@ -26,6 +26,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [permissionStatus, setPermissionStatus] = useState<NotificationPermission>('default');
   const [isTestingPush, setIsTestingPush] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
+  const [pasteModalOpen, setPasteModalOpen] = useState(false);
+  const [pasteJsonText, setPasteJsonText] = useState('');
+  const [pasteError, setPasteError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -87,16 +90,51 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     reader.onload = (evt) => {
       const content = evt.target?.result as string;
       if (content) {
-        const success = StorageService.importBackup(content);
-        if (success) {
-          alert('¡Copia de seguridad restaurada con éxito!');
+        const res = StorageService.importBackup(content);
+        if (res.success) {
+          alert(res.message);
           onDataReload();
         } else {
-          alert('Error: el archivo seleccionado no tiene el formato JSON válido.');
+          alert(res.message || 'Error: el archivo seleccionado no tiene el formato JSON válido.');
         }
       }
     };
     reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  const handleProcessPasteJson = () => {
+    setPasteError(null);
+    if (!pasteJsonText.trim()) {
+      setPasteError('El cuadro de texto está vacío. Pega el JSON copiado del otro teléfono.');
+      return;
+    }
+
+    const res = StorageService.importBackup(pasteJsonText);
+    if (res.success) {
+      alert(res.message);
+      setPasteModalOpen(false);
+      setPasteJsonText('');
+      onDataReload();
+    } else {
+      setPasteError(res.message || 'Error al procesar el JSON.');
+    }
+  };
+
+  const handlePasteFromClipboard = async () => {
+    try {
+      if (navigator.clipboard && navigator.clipboard.readText) {
+        const text = await navigator.clipboard.readText();
+        if (text && text.trim()) {
+          setPasteJsonText(text);
+          setPasteError(null);
+        } else {
+          setPasteError('El portapapeles está vacío o no contiene texto legible.');
+        }
+      }
+    } catch {
+      setPasteError('No se pudo acceder al portapapeles automáticamente. Mantén presionado en el cuadro de texto y toca "Pegar".');
+    }
   };
 
   const handleResetData = () => {
@@ -437,7 +475,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           Exporta una copia de seguridad completa a tu dispositivo para transferirla o resguardarla sin internet.
         </p>
 
-        <div className="grid grid-cols-2 gap-3 pt-1">
+        <div className="grid grid-cols-3 gap-2 pt-1">
           <button
             id="export-backup-btn"
             onClick={handleExportBackup}
@@ -453,7 +491,20 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             className="p-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-semibold text-zinc-200 flex flex-col items-center justify-center gap-1.5 transition-colors"
           >
             <Upload className="w-5 h-5 text-indigo-400" />
-            <span>Restaurar Copia</span>
+            <span>Cargar Archivo</span>
+          </button>
+
+          <button
+            id="paste-backup-btn"
+            type="button"
+            onClick={() => {
+              setPasteModalOpen(true);
+              setPasteError(null);
+            }}
+            className="p-3 rounded-xl bg-teal-500/10 hover:bg-teal-500/20 border border-teal-500/30 text-xs font-semibold text-teal-300 flex flex-col items-center justify-center gap-1.5 transition-colors"
+          >
+            <ClipboardPaste className="w-5 h-5 text-teal-400" />
+            <span>Pegar JSON</span>
           </button>
         </div>
 
@@ -465,6 +516,76 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           className="hidden"
         />
       </div>
+
+      {/* Paste JSON Modal */}
+      {pasteModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="relative w-full max-w-lg bg-[#161922] border border-white/15 rounded-2xl p-4 shadow-2xl space-y-3 animate-scale-up">
+            <div className="flex items-center justify-between border-b border-white/10 pb-2">
+              <div className="flex items-center gap-2">
+                <ClipboardPaste className="w-4 h-4 text-teal-400" />
+                <h3 className="text-sm font-bold text-white">Importar y Fusionar JSON</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPasteModalOpen(false)}
+                className="p-1 text-zinc-400 hover:text-white rounded-lg"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-zinc-300">
+              Pega el texto JSON copiado desde el otro teléfono (Ej: Neo3 a TCL). La app comparará por códigos de barra, fusionará historiales sin duplicar y recalculará las existencias automáticamente:
+            </p>
+
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={handlePasteFromClipboard}
+                className="px-2.5 py-1 bg-teal-500/20 hover:bg-teal-500/30 text-teal-300 text-xs font-semibold rounded-lg border border-teal-500/30 flex items-center gap-1"
+              >
+                <ClipboardPaste className="w-3.5 h-3.5" />
+                <span>Pegar Portapapeles</span>
+              </button>
+            </div>
+
+            <textarea
+              value={pasteJsonText}
+              onChange={(e) => {
+                setPasteJsonText(e.target.value);
+                setPasteError(null);
+              }}
+              rows={8}
+              placeholder="Pega aquí el código JSON..."
+              className="w-full bg-[#0d1017] border border-white/10 rounded-xl p-3 text-xs font-mono text-zinc-200 focus:outline-hidden focus:border-teal-500 resize-none"
+            />
+
+            {pasteError && (
+              <p className="text-xs text-rose-400 bg-rose-500/10 border border-rose-500/20 p-2 rounded-xl">
+                {pasteError}
+              </p>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setPasteModalOpen(false)}
+                className="px-3.5 py-2 bg-white/10 hover:bg-white/15 text-zinc-300 text-xs font-medium rounded-xl"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleProcessPasteJson}
+                className="px-4 py-2 bg-gradient-to-r from-teal-500 to-emerald-600 hover:from-teal-400 hover:to-emerald-500 text-white font-bold text-xs rounded-xl shadow-lg transition-all active:scale-95"
+              >
+                Fusionar e Importar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Reset catalogue */}
       <div className="pt-2">
