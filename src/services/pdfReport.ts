@@ -1,4 +1,7 @@
 import { jsPDF } from 'jspdf';
+import { Share } from '@capacitor/share';
+import { Filesystem, Directory } from '@capacitor/filesystem';
+import { Capacitor } from '@capacitor/core';
 import { Product, StockMovement, StoreSettings } from '../types';
 
 export interface ReportOptions {
@@ -7,12 +10,12 @@ export interface ReportOptions {
   includeMovements?: boolean;
 }
 
-export function generateInventoryPDF(
+export function buildInventoryPDFDoc(
   products: Product[],
   movements: StockMovement[],
   settings: StoreSettings,
   options: ReportOptions = {}
-): void {
+): jsPDF {
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
@@ -303,10 +306,95 @@ export function generateInventoryPDF(
     );
   }
 
-  // Trigger browser download
+  return doc;
+}
+
+export function generateInventoryPDF(
+  products: Product[],
+  movements: StockMovement[],
+  settings: StoreSettings,
+  options: ReportOptions = {}
+): void {
+  const doc = buildInventoryPDFDoc(products, movements, settings, options);
   const cleanStoreName = (settings.storeName || 'inventario')
     .toLowerCase()
     .replace(/[^a-z0-9]/g, '_');
   const filename = `${cleanStoreName}_existencias_${new Date().toISOString().slice(0, 10)}.pdf`;
   doc.save(filename);
+}
+
+export async function shareInventoryPDFNative(
+  products: Product[],
+  movements: StockMovement[],
+  settings: StoreSettings,
+  options: ReportOptions = {}
+): Promise<{ success: boolean; method: string }> {
+  const doc = buildInventoryPDFDoc(products, movements, settings, options);
+  const cleanStoreName = (settings.storeName || 'inventario')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '_');
+  const filename = `${cleanStoreName}_existencias_${new Date().toISOString().slice(0, 10)}.pdf`;
+  const title = settings.storeName || 'Balance de Existencias';
+
+  // 1. Native Capacitor Environment (@capacitor/share + @capacitor/filesystem)
+  if (Capacitor.isNativePlatform()) {
+    try {
+      const dataUri = doc.output('datauristring');
+      const base64Data = dataUri.includes(',') ? dataUri.split(',')[1] : dataUri;
+
+      const savedFile = await Filesystem.writeFile({
+        path: filename,
+        data: base64Data,
+        directory: Directory.Cache,
+      });
+
+      await Share.share({
+        title,
+        text: `Reporte de Existencias (PDF) - ${title}`,
+        files: [savedFile.uri],
+        url: savedFile.uri,
+        dialogTitle: 'Compartir Reporte de Existencias (PDF)',
+      });
+
+      return { success: true, method: 'capacitor_native' };
+    } catch (err: any) {
+      console.warn('Native Capacitor share error, checking cancellation or fallback:', err);
+      const msg = err?.message || String(err);
+      if (
+        msg.includes('canceled') ||
+        msg.includes('cancelled') ||
+        msg.includes('abort') ||
+        msg.includes('dismissed')
+      ) {
+        return { success: true, method: 'cancelled_by_user' };
+      }
+    }
+  }
+
+  // 2. Web Share API fallback if supported
+  try {
+    const pdfBlob = doc.output('blob');
+    const pdfFile = new File([pdfBlob], filename, { type: 'application/pdf' });
+
+    if (
+      typeof navigator !== 'undefined' &&
+      navigator.canShare &&
+      navigator.canShare({ files: [pdfFile] })
+    ) {
+      await navigator.share({
+        files: [pdfFile],
+        title,
+        text: `Reporte de Existencias (PDF) - ${title}`,
+      });
+      return { success: true, method: 'web_share' };
+    }
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      return { success: true, method: 'cancelled_by_user' };
+    }
+  }
+
+  // 3. Fallback: Direct vector download
+  doc.save(filename);
+  return { success: true, method: 'download_fallback' };
 }

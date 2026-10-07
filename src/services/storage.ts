@@ -3,6 +3,7 @@ import { INITIAL_PRODUCTS, INITIAL_CATEGORIES, INITIAL_SETTINGS } from '../data/
 import { AuthService } from './authService';
 import { ShoppingService } from './shoppingService';
 import { CloudBackupService } from './cloudBackupService';
+import { AntiTheftService } from './antiTheftService';
 
 const STORAGE_KEYS = {
   PRODUCTS: 'stock_app_products_v1',
@@ -1211,6 +1212,9 @@ export const StorageService = {
 
       // Respaldo silencioso en la nube
       CloudBackupService.triggerAutoBackup();
+
+      // Reiniciar reloj antirrobo de 48 horas al sincronizar datos
+      AntiTheftService.recordSuccessfulSync();
 
       return {
         success: true,

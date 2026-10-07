@@ -236,11 +236,11 @@ export const UserLoginModal: React.FC<UserLoginModalProps> = ({
                   type="button"
                   onClick={handleDeviceLockAuth}
                   disabled={isVerifyingDevice}
-                  className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-sky-600/30 via-indigo-600/30 to-purple-600/30 hover:from-sky-600/40 hover:to-purple-600/40 text-white font-bold text-xs flex items-center justify-center gap-2 border border-sky-400/40 shadow-sm transition-all active:scale-95"
+                  className="w-full py-2.5 px-3 rounded-xl bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-bold text-xs flex items-center justify-center gap-2 border border-blue-400/50 shadow-md shadow-blue-500/20 transition-all active:scale-95 cursor-pointer disabled:opacity-50"
                 >
-                  <Fingerprint className="w-4 h-4 text-sky-300 animate-pulse" />
+                  <Fingerprint className="w-4 h-4 text-white" />
                   <span>
-                    {isVerifyingDevice ? 'Verificando celular...' : 'Desbloquear con Celular / Huella'}
+                    {isVerifyingDevice ? 'Verificando huella...' : 'Desbloquear con Huella o Celular'}
                   </span>
                 </button>
               )}

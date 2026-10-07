@@ -1,4 +1,6 @@
 import { AppUser, AccessLog, AccessMethod, UserRole } from '../types';
+import { NativeBiometric } from 'capacitor-native-biometric';
+import { Capacitor } from '@capacitor/core';
 
 const STORAGE_KEYS = {
   USERS: 'stock_app_users_v1',
@@ -196,7 +198,7 @@ export const AuthService = {
     localStorage.removeItem(STORAGE_KEYS.ACCESS_LOGS);
   },
 
-  // Authenticate user with PIN / Password
+  // Authenticate user with PIN / Password with Master Key Hierarchy
   authenticateWithPin(userId: string, enteredPin: string): { success: boolean; user?: AppUser; error?: string } {
     const users = this.getUsers();
     const user = users.find((u) => u.id === userId);
@@ -210,15 +212,30 @@ export const AuthService = {
       return { success: false, error: 'La cuenta de este usuario está desactivada' };
     }
 
-    const isMatch = user.pin.trim() === enteredPin.trim();
+    const cleanEntered = enteredPin.trim();
+    const isEmployeeMatch = user.pin.trim() === cleanEntered;
+
+    // Regla 3: Llave Maestra para el Administrador
+    // Si se selecciona el perfil de un empleado (Carlos, Lucía, etc.), permitir ingresar con su clave
+    // O ingresando el PIN del Administrador Principal como Llave Maestra para auditar la sesión en vivo.
+    const adminUsers = users.filter((u) => u.role === 'admin' && u.isActive);
+    const matchedAdmin = adminUsers.find((adm) => adm.pin.trim() === cleanEntered);
+    const isMasterKeyMatch = Boolean(matchedAdmin);
+
+    const isAuthorized = isEmployeeMatch || isMasterKeyMatch;
+
     this.recordAccessLog(
       user,
       'password',
-      isMatch,
-      isMatch ? 'Acceso correcto por contraseña/PIN' : 'Contraseña o PIN incorrecto'
+      isAuthorized,
+      isEmployeeMatch
+        ? 'Acceso correcto por contraseña/PIN del empleado'
+        : isMasterKeyMatch
+        ? `Acceso autorizado con Llave Maestra del Administrador (${matchedAdmin?.name})`
+        : 'Contraseña o PIN incorrecto'
     );
 
-    if (isMatch) {
+    if (isAuthorized) {
       this.setCurrentUser(user);
       this.setLocked(false);
       this.setAuthenticated(true);
@@ -228,7 +245,17 @@ export const AuthService = {
     }
   },
 
-  // Authenticate with Device screen lock / biometric sensor
+  // Helper para verificar el PIN del Administrador Principal (desbloqueo de Antirrobo)
+  verifyPrincipalAdminPin(enteredPin: string): boolean {
+    const users = this.getUsers();
+    const clean = enteredPin.trim();
+    if (!clean) return false;
+    const admin = users.find((u) => u.role === 'admin' && u.isActive && u.pin.trim() === clean);
+    return Boolean(admin);
+  },
+
+  // Regla 2: Configurar Biometría Nativa Real (@capacitor-community/native-biometric / capacitor-native-biometric)
+  // Llama obligatoriamente a la API nativa de Android/iOS. Exige huella o rostro real; si falla, acceso denegado.
   async authenticateWithDeviceLock(userId: string): Promise<{ success: boolean; user?: AppUser; error?: string }> {
     const users = this.getUsers();
     const user = users.find((u) => u.id === userId);
@@ -245,12 +272,51 @@ export const AuthService = {
     if (!user.phoneLockEnabled) {
       return {
         success: false,
-        error: 'Este usuario no tiene activado el bloqueo principal o huella del celular. Use PIN.',
+        error: 'Este usuario no tiene activado el desbloqueo biométrico en la app. Ingrese con PIN.',
       };
     }
 
+    const isNative = Capacitor.isNativePlatform();
+
+    if (isNative) {
+      try {
+        const available = await NativeBiometric.isAvailable({ useFallback: false });
+        if (!available.isAvailable) {
+          this.recordAccessLog(user, 'device_lock', false, 'Sensor biométrico no disponible o no configurado en Android');
+          return {
+            success: false,
+            error: 'No hay huella dactilar o rostro configurado en este celular. Ingrese con PIN.',
+          };
+        }
+
+        // Llamada obligatoria al prompt biométrico nativo de Android
+        await NativeBiometric.verifyIdentity({
+          title: 'Verificación Biométrica Requerida',
+          subtitle: `Ingreso de ${user.name}`,
+          description: 'Coloque su huella dactilar o mire a la cámara frontal para ingresar.',
+          reason: 'Control de seguridad y acceso al depósito',
+          negativeButtonText: 'Cancelar',
+          maxAttempts: 3,
+        });
+
+        // Verificación exitosa
+        this.recordAccessLog(user, 'device_lock', true, 'Huella dactilar / biometría nativa verificada exitosamente');
+        this.setCurrentUser(user);
+        this.setLocked(false);
+        this.setAuthenticated(true);
+        return { success: true, user };
+      } catch (nativeErr: any) {
+        console.warn('Fallo en autenticación biométrica nativa:', nativeErr);
+        this.recordAccessLog(user, 'device_lock', false, `Biometría nativa denegada o fallida: ${nativeErr?.message || 'Error'}`);
+        return {
+          success: false,
+          error: 'Acceso biométrico denegado. Huella o rostro no reconocido.',
+        };
+      }
+    }
+
+    // Entorno Web / Navegador de desarrollo: WebAuthn estricto
     try {
-      // Check for Web Authentication (Biometric / Screen Lock credential)
       if (
         typeof window !== 'undefined' &&
         window.PublicKeyCredential &&
@@ -258,39 +324,37 @@ export const AuthService = {
       ) {
         const hasPlatformAuth = await window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
         if (hasPlatformAuth) {
-          // Attempt biometric/device lock verification
           const challenge = new Uint8Array(32);
           window.crypto.getRandomValues(challenge);
 
-          try {
-            await navigator.credentials.get({
-              publicKey: {
-                challenge,
-                timeout: 60000,
-                userVerification: 'required',
-                rpId: window.location.hostname || 'localhost',
-              },
-            });
-          } catch (biometricErr: any) {
-            // If the user cancelled or credentials aren't registered yet,
-            // we simulate/allow the device security confirmation with user interaction
-            if (biometricErr?.name === 'NotAllowedError') {
-              this.recordAccessLog(user, 'device_lock', false, 'Bloqueo celular cancelado por el usuario');
-              return { success: false, error: 'Desbloqueo cancelado en el dispositivo' };
-            }
-          }
+          await navigator.credentials.get({
+            publicKey: {
+              challenge,
+              timeout: 60000,
+              userVerification: 'required',
+              rpId: window.location.hostname || 'localhost',
+            },
+          });
+
+          this.recordAccessLog(user, 'device_lock', true, 'Biometría web verificada');
+          this.setCurrentUser(user);
+          this.setLocked(false);
+          this.setAuthenticated(true);
+          return { success: true, user };
         }
       }
 
-      // Validated via phone lock / biometric device verification
-      this.recordAccessLog(user, 'device_lock', true, 'Desbloqueo biométrico / pantalla de celular verificado');
-      this.setCurrentUser(user);
-      this.setLocked(false);
-      this.setAuthenticated(true);
-      return { success: true, user };
-    } catch (err: any) {
-      this.recordAccessLog(user, 'device_lock', false, `Fallo en verificación celular: ${err?.message || 'Error'}`);
-      return { success: false, error: 'No se pudo verificar el bloqueo del dispositivo. Ingrese su PIN.' };
+      this.recordAccessLog(user, 'device_lock', false, 'Biometría no disponible en este navegador');
+      return {
+        success: false,
+        error: 'El sensor biométrico no está disponible en este entorno. Ingrese físicamente su PIN.',
+      };
+    } catch (webErr: any) {
+      this.recordAccessLog(user, 'device_lock', false, 'Autenticación biométrica web cancelada o fallida');
+      return {
+        success: false,
+        error: 'Acceso denegado: Falló la verificación de huella o bloqueo del dispositivo.',
+      };
     }
   },
 

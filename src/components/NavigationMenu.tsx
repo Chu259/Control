@@ -21,7 +21,7 @@ import {
   LogOut,
   CalendarClock,
 } from 'lucide-react';
-import { AppTab } from '../types';
+import { AppTab, AppUser } from '../types';
 
 interface NavigationMenuProps {
   currentTab: AppTab;
@@ -33,6 +33,7 @@ interface NavigationMenuProps {
   onOpenNewProduct: () => void;
   onQuickMovementOpen: (type: 'in' | 'out') => void;
   onLogout?: () => void;
+  currentUser?: AppUser | null;
 }
 
 export const NavigationMenu: React.FC<NavigationMenuProps> = ({
@@ -45,25 +46,37 @@ export const NavigationMenu: React.FC<NavigationMenuProps> = ({
   onOpenNewProduct,
   onQuickMovementOpen,
   onLogout,
+  currentUser,
 }) => {
   const [speedDialOpen, setSpeedDialOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+
+  // Regla 5: Invisibilidad Absoluta para rol PERSONAL (Carlos, Lucía, etc.)
+  const isPersonal = currentUser?.role === 'user';
 
   const mainTabs: { id: AppTab; label: string; icon: React.FC<{ className?: string }>; badge?: number }[] = [
     { id: 'inventory', label: 'Stock', icon: LayoutGrid },
     { id: 'dummies', label: 'Ráfaga Dummies', icon: Zap },
     { id: 'replenishment', label: 'Reposición', icon: Boxes, badge: repositionCount },
     { id: 'shopping', label: 'Compras', icon: ShoppingCart, badge: shoppingCount },
-    { id: 'movements', label: 'Movimientos', icon: ArrowUpDown },
+    ...(!isPersonal ? [{ id: 'movements' as AppTab, label: 'Movimientos', icon: ArrowUpDown }] : []),
     { id: 'alerts', label: 'Alertas', icon: Bell, badge: lowStockCount },
   ];
 
   const secondaryTabs: { id: AppTab; label: string; icon: React.FC<{ className?: string }>; desc: string }[] = [
     { id: 'expirations', label: 'Agenda de Vencimientos', icon: CalendarClock, desc: 'Control de fin de mes y alarmas horarias' },
-    { id: 'users', label: 'Usuarios y Accesos', icon: Users, desc: 'Administradores, celulares y auditoría' },
-    { id: 'reports', label: 'Reportes y Métricas', icon: FileText, desc: 'Historial y estadísticas de stock' },
+    ...(!isPersonal
+      ? [
+          { id: 'users' as AppTab, label: 'Usuarios y Accesos', icon: Users, desc: 'Administradores, celulares y auditoría' },
+          { id: 'reports' as AppTab, label: 'Reportes y Métricas', icon: FileText, desc: 'Historial y estadísticas de stock' },
+        ]
+      : []),
     { id: 'sync', label: 'Sincronizar Dispositivos', icon: RefreshCw, desc: 'Conexión maestro y clientes' },
-    { id: 'settings', label: 'Configuración', icon: Settings, desc: 'Preferencias, tienda y notificaciones' },
+    ...(!isPersonal
+      ? [
+          { id: 'settings' as AppTab, label: 'Configuración', icon: Settings, desc: 'Preferencias, tienda y notificaciones' },
+        ]
+      : []),
   ];
 
   const isSecondaryActive = secondaryTabs.some((t) => t.id === currentTab);

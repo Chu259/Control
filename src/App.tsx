@@ -36,6 +36,8 @@ import { CategoryManagerModal } from './components/CategoryManagerModal';
 import { NavigationMenu } from './components/NavigationMenu';
 import { ExpirationsView } from './components/ExpirationsView';
 import { ExpirationService } from './services/expirationService';
+import { AntiTheftService } from './services/antiTheftService';
+import { AntiTheftLockScreen } from './components/AntiTheftLockScreen';
 import { AlertTriangle, Hourglass, PackageX, Plus, RefreshCw, Smartphone, Sparkles, AlertOctagon } from 'lucide-react';
 import { App as CapApp } from '@capacitor/app';
 import { Sound } from './services/sound';
@@ -172,6 +174,31 @@ export default function App() {
       window.removeEventListener('expirations_updated', updateAlarmsAndClock);
     };
   }, []);
+
+  // Regla 1: Reloj de control interno de sincronización (Antirrobo 48hs)
+  const [isAntiTheftLocked, setIsAntiTheftLocked] = useState(() => AntiTheftService.isSyncTimeoutExceeded());
+
+  useEffect(() => {
+    const checkAntiTheft = () => {
+      setIsAntiTheftLocked(AntiTheftService.isSyncTimeoutExceeded());
+    };
+    checkAntiTheft();
+    const interval = setInterval(checkAntiTheft, 15000);
+    window.addEventListener('anti_theft_status_changed', checkAntiTheft);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('anti_theft_status_changed', checkAntiTheft);
+    };
+  }, []);
+
+  // Regla 5: Invisibilidad Absoluta para rol PERSONAL (Carlos, Lucía)
+  const isPersonalRole = currentUser?.role === 'user';
+
+  useEffect(() => {
+    if (isPersonalRole && ['movements', 'reports', 'settings', 'users'].includes(currentTab)) {
+      setCurrentTab('inventory');
+    }
+  }, [isPersonalRole, currentTab]);
 
   // Low stock counter (Dual alert: unidad o bulto por debajo del mínimo)
   const lowStockCount = products.filter((p) => checkStockAlert(p, settings.defaultMinStock).isLow).length;
@@ -503,6 +530,21 @@ export default function App() {
     setDetailModalOpen(true);
   };
 
+  // Regla 1: Bloqueo Remoto por Inactividad de Sincronización (Antirrobo)
+  // Si transcurren más de 48 horas sin sincronizar con la terminal del Administrador,
+  // el sistema se bloquea por completo de forma automática.
+  if (isAntiTheftLocked) {
+    return (
+      <AntiTheftLockScreen
+        storeName={settings.storeName}
+        onUnlocked={() => {
+          setIsAntiTheftLocked(false);
+          reloadAllData();
+        }}
+      />
+    );
+  }
+
   // If user is not logged in, display the Welcome Login Screen
   if (!isAuthenticated) {
     return (
@@ -777,7 +819,7 @@ export default function App() {
             </div>
           )}
 
-          {currentTab === 'movements' && (
+          {currentTab === 'movements' && !isPersonalRole && (
             <MovementsView
               movements={movements}
               currency={settings.currencySymbol || '$'}
@@ -840,7 +882,7 @@ export default function App() {
             />
           )}
 
-          {currentTab === 'reports' && (
+          {currentTab === 'reports' && !isPersonalRole && (
             <ReportsView
               products={products}
               movements={movements}
@@ -850,7 +892,7 @@ export default function App() {
             />
           )}
 
-          {currentTab === 'settings' && (
+          {currentTab === 'settings' && !isPersonalRole && (
             <SettingsView
               settings={settings}
               onUpdateSettings={(newSettings) => {
@@ -864,7 +906,7 @@ export default function App() {
             />
           )}
 
-          {currentTab === 'users' && (
+          {currentTab === 'users' && !isPersonalRole && (
             <UserManagementView
               currentUser={currentUser}
               onUserChanged={(u) => setCurrentUser(u)}
@@ -896,6 +938,7 @@ export default function App() {
           repositionCount={repositionPendingTotal}
           shoppingCount={shoppingCount}
           onLogout={handleLogout}
+          currentUser={currentUser}
           onOpenScanner={() => {
             setScanTarget(null);
             setScannerMode('lookup');

@@ -3,6 +3,7 @@ import { Product, StockMovement, Category, StoreSettings, DeviceSyncConfig, Sync
 import { StorageService } from './storage';
 import { ShoppingService } from './shoppingService';
 import { AuthService } from './authService';
+import { AntiTheftService } from './antiTheftService';
 import { compressDataUrl } from '../utils/imageCompressor';
 
 export interface OptimizedExportResult {
@@ -307,6 +308,9 @@ export const SyncService = {
         lastSyncTimestamp: now,
         connectedDevices: resData.connectedDevices || config.connectedDevices,
       });
+
+      // Anti-theft 48h timer reset on successful sync with Administrator terminal
+      AntiTheftService.recordSuccessfulSync();
 
       const newUserAlertsCount = (resData.newProductsAlerts || []).length;
       let summaryMsg = `Sincronización exitosa (${resData.products?.length || 0} productos actualizados).`;
@@ -661,6 +665,7 @@ export const SyncService = {
           syncCode: payload.storeCode || payload.syncCode || config.syncCode,
           lastSyncTimestamp: new Date().toISOString(),
         });
+        AntiTheftService.recordSuccessfulSync();
       } catch {}
 
       return {

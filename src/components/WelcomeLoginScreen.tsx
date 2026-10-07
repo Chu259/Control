@@ -12,7 +12,6 @@ import {
   Store,
   Fingerprint,
   ArrowRight,
-  Sparkles,
 } from 'lucide-react';
 import { AppUser, StoreSettings } from '../types';
 import { AuthService } from '../services/authService';
@@ -118,19 +117,13 @@ export const WelcomeLoginScreen: React.FC<WelcomeLoginScreenProps> = ({
         onLoginSuccess(result.user);
       } else {
         Sound.playWarningTone();
-        setError(result.error || 'No se pudo verificar el bloqueo del dispositivo');
+        setError(result.error || 'Acceso biométrico denegado. Huella o rostro no reconocido.');
       }
     } catch {
       setIsVerifying(false);
-      setError('Fallo en la autenticación biométrica o del teléfono');
+      Sound.playWarningTone();
+      setError('Acceso denegado: Falló la verificación de la huella dactilar o sensor biométrico.');
     }
-  };
-
-  const handleQuickDemoFill = (user: AppUser) => {
-    setSelectedUser(user);
-    setPin(user.pin);
-    setError(null);
-    Sound.playScanBeep();
   };
 
   return (
@@ -327,16 +320,16 @@ export const WelcomeLoginScreen: React.FC<WelcomeLoginScreenProps> = ({
                 )}
               </button>
 
-              {/* Device lock option if enabled for this user */}
+              {/* Botón Azul de Biometría Nativa (@capacitor-community/native-biometric) */}
               {selectedUser.phoneLockEnabled && (
                 <button
                   type="button"
                   id="btn-login-biometric"
                   onClick={handleDeviceUnlock}
                   disabled={isVerifying}
-                  className="w-full py-2.5 px-4 bg-[#1b1f2e] hover:bg-[#23283b] text-sky-300 font-semibold rounded-xl text-xs flex items-center justify-center gap-2 border border-sky-500/30 transition-all"
+                  className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-2 border border-blue-400/50 shadow-md shadow-blue-600/30 transition-all cursor-pointer disabled:opacity-50"
                 >
-                  <Fingerprint className="w-4 h-4 text-sky-400" />
+                  <Fingerprint className="w-4 h-4 text-white" />
                   <span>Desbloquear con Huella o Celular</span>
                 </button>
               )}
@@ -344,31 +337,6 @@ export const WelcomeLoginScreen: React.FC<WelcomeLoginScreenProps> = ({
           </form>
         </div>
       )}
-
-      {/* Demo Credentials Quick-Fill Helper (Convenient for test and onboarding) */}
-      <div className="mt-2 pt-2 border-t border-white/5">
-        <div className="flex items-center justify-between mb-1.5">
-          <p className="text-[10px] text-zinc-400 font-medium flex items-center gap-1">
-            <Sparkles className="w-3 h-3 text-amber-400" />
-            <span>Accesos directos de demostración:</span>
-          </p>
-        </div>
-
-        <div className="flex flex-wrap gap-1.5">
-          {users.map((u) => (
-            <button
-              key={u.id}
-              type="button"
-              id={`quick-demo-fill-${u.username}`}
-              onClick={() => handleQuickDemoFill(u)}
-              className="text-[10px] px-2 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-300 border border-white/5 transition-colors flex items-center gap-1"
-            >
-              <span className="font-semibold">{u.name.split(' ')[0]}:</span>
-              <span className="font-mono text-amber-400">{u.pin}</span>
-            </button>
-          ))}
-        </div>
-      </div>
     </div>
   );
 };

@@ -22,6 +22,7 @@
     "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.3.3",
     "@vitejs/plugin-react": "^6.1.1",
+    "capacitor-native-biometric": "^4.2.2",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "jspdf": "^4.2.1",
