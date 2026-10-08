@@ -33,9 +33,12 @@ export const ExpirationService = {
     product: Product;
     expirationDate: string; // YYYY-MM-DD
     notes?: string;
+    tempProductName?: string;
   }): ExpirationItem {
     const list = this.getExpirations();
     const cleanDate = params.expirationDate.trim();
+    const cleanTempName = params.tempProductName?.trim();
+    const effectiveProductName = cleanTempName || params.product.name;
 
     // Check if an active item for same product and same expiration date exists
     const existingIndex = list.findIndex(
@@ -46,7 +49,8 @@ export const ExpirationService = {
     if (existingIndex >= 0) {
       targetItem = {
         ...list[existingIndex],
-        productName: params.product.name,
+        productName: effectiveProductName,
+        tempProductName: cleanTempName || list[existingIndex].tempProductName,
         barcode: params.product.barcodeUnit || params.product.barcode,
         notes: params.notes || list[existingIndex].notes,
       };
@@ -55,7 +59,8 @@ export const ExpirationService = {
       targetItem = {
         id: `exp-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
         productId: params.product.id,
-        productName: params.product.name,
+        productName: effectiveProductName,
+        tempProductName: cleanTempName,
         barcode: params.product.barcodeUnit || params.product.barcode,
         expirationDate: cleanDate,
         aisleName: params.product.category,

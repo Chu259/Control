@@ -186,6 +186,7 @@ export interface ExpirationItem {
   registeredAt: string;
   resolvedAt?: string;
   notes?: string;
+  tempProductName?: string; // Anotaciones / Nombre Temporal del Artículo si no está en catálogo
 }
 
 export interface StoreSettings {

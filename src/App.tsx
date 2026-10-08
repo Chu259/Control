@@ -625,7 +625,7 @@ export default function App() {
                     >
                       <div>
                         <p className="text-xs font-bold text-white leading-snug">
-                          ⚠️ ALERTA DE VENCIMIENTO HOY: <span className="text-amber-300 font-extrabold">{item.productName}</span> vence hoy. Retirar o poner en oferta.
+                          ⚠️ ALERTA DE VENCIMIENTO HOY: <span className="text-amber-300 font-extrabold">{item.tempProductName || item.productName}</span> vence hoy. Retirar o poner en oferta.
                         </p>
                         <p className="text-[10px] text-amber-200/80 font-mono mt-0.5">
                           Código: {item.barcode} {item.aisleName ? `• ${item.aisleName}` : ''}
@@ -1096,7 +1096,7 @@ export default function App() {
                   <div key={item.id} className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 space-y-2">
                     <div>
                       <p className="text-xs font-bold text-white leading-snug">
-                        ⚠️ ALERTA DE VENCIMIENTO HOY: <span className="text-rose-300 font-extrabold">{item.productName}</span> vence hoy. Retirar o poner en oferta.
+                        ⚠️ ALERTA DE VENCIMIENTO HOY: <span className="text-rose-300 font-extrabold">{item.tempProductName || item.productName}</span> vence hoy. Retirar o poner en oferta.
                       </p>
                       <p className="text-[10px] text-zinc-400 font-mono mt-0.5">
                         Código: {item.barcode} {item.aisleName ? `• ${item.aisleName}` : ''}

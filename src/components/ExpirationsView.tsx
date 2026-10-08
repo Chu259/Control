@@ -19,6 +19,7 @@ import {
   X,
   ExternalLink,
   Barcode as BarcodeIcon,
+  Pause,
 } from 'lucide-react';
 import { Product, ExpirationItem } from '../types';
 import { StorageService } from '../services/storage';
@@ -56,10 +57,19 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
   // Manual code input
   const [manualCode, setManualCode] = useState('');
 
+  // Camera freeze state (Congelar Cámara tras Detección para evitar doble escaneo)
+  const [isCameraFrozen, setIsCameraFrozen] = useState(false);
+  const isCameraFrozenRef = useRef(false);
+
   // Selected product being registered
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [manualProductName, setManualProductName] = useState('');
   const [detectedBarcode, setDetectedBarcode] = useState('');
+
+  // Cuadro de Anotaciones / Nombre Temporal del Artículo para productos nuevos
+  const [tempAnnotation, setTempAnnotation] = useState('');
+  const [annotationError, setAnnotationError] = useState<string | null>(null);
+  const tempInputRef = useRef<HTMLInputElement | null>(null);
 
   // Quick date selector state (Día / Mes / Año)
   const today = new Date();
@@ -170,6 +180,19 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
     setTorchOn(false);
   };
 
+  const resumeCamera = async () => {
+    setIsCameraFrozen(false);
+    isCameraFrozenRef.current = false;
+    isProcessingRef.current = false;
+    if (videoRef.current && cameraActive) {
+      try {
+        await videoRef.current.play();
+      } catch (err) {
+        console.warn('Error resuming video stream:', err);
+      }
+    }
+  };
+
   const toggleTorch = async () => {
     if (!stream) return;
     const track = stream.getVideoTracks()[0];
@@ -191,6 +214,18 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
 
     Sound.playScanBeep();
 
+    // 1. Congelar Cámara por completo tras detección (Evitar doble escaneo)
+    if (videoRef.current) {
+      try {
+        videoRef.current.pause();
+      } catch (e) {
+        console.warn('Error pausing video:', e);
+      }
+    }
+    setIsCameraFrozen(true);
+    isCameraFrozenRef.current = true;
+    isProcessingRef.current = true;
+
     // Look up in products catalog
     const found = products.find(
       (p) =>
@@ -200,13 +235,19 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
     );
 
     setDetectedBarcode(cleanCode);
+    setAnnotationError(null);
 
     if (found) {
       setSelectedProduct(found);
       setManualProductName(found.name);
+      setTempAnnotation('');
     } else {
       setSelectedProduct(null);
-      setManualProductName(`Producto (${cleanCode})`);
+      setManualProductName('');
+      setTempAnnotation('');
+      setTimeout(() => {
+        tempInputRef.current?.focus();
+      }, 150);
     }
 
     // Default expiration date: end of current month
@@ -231,8 +272,14 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
         return;
       }
 
+      // Si la cámara está congelada o procesando un escaneo previo, PAUSAR captura por completo
+      if (isCameraFrozenRef.current || isProcessingRef.current) {
+        scanLoopRef.current = requestAnimationFrame(scanFrame);
+        return;
+      }
+
       // Throttle scans to every 250ms
-      if (timestamp - lastScanTime > 250 && !isProcessingRef.current) {
+      if (timestamp - lastScanTime > 250) {
         lastScanTime = timestamp;
         try {
           const barcodes = await detector.detect(videoRef.current);
@@ -241,9 +288,6 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
             if (rawValue && rawValue.trim()) {
               isProcessingRef.current = true;
               handleRecognizeBarcode(rawValue.trim());
-              setTimeout(() => {
-                isProcessingRef.current = false;
-              }, 1200);
             }
           }
         } catch {
@@ -279,20 +323,36 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
 
   const expirationDateStr = formatIsoDate(selectedDay, selectedMonth, selectedYear);
 
+  const handleCancel = () => {
+    setSelectedProduct(null);
+    setDetectedBarcode('');
+    setManualProductName('');
+    setTempAnnotation('');
+    setAnnotationError(null);
+    resumeCamera();
+  };
+
   // Save expiration logic
   const handleSaveExpiration = () => {
-    if (!selectedProduct && !manualProductName.trim()) {
-      Sound.playWarningBeep();
-      return;
+    // 2. Cuadro de "Anotaciones / Nombre Temporal" obligatorio si el producto no está en el catálogo
+    if (!selectedProduct) {
+      if (!tempAnnotation.trim()) {
+        setAnnotationError('Debes ingresar las anotaciones o el nombre temporal del artículo.');
+        Sound.playWarningBeep();
+        tempInputRef.current?.focus();
+        return;
+      }
     }
+
+    const effectiveName = selectedProduct ? selectedProduct.name : tempAnnotation.trim();
 
     const prodToSave: Product = selectedProduct || {
       id: `custom-${Date.now()}`,
-      name: manualProductName.trim(),
+      name: effectiveName,
       barcode: detectedBarcode || `CUSTOM-${Date.now()}`,
       barcodeUnit: detectedBarcode || `CUSTOM-${Date.now()}`,
       unitsPerBulk: 1,
-      category: 'General',
+      category: 'Sin Registrar',
       stock: 0,
       minStockAlert: 5,
       costPrice: 0,
@@ -304,21 +364,26 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
       product: prodToSave,
       expirationDate: expirationDateStr,
       notes: notes.trim() || 'Control visual fin de mes',
+      tempProductName: !selectedProduct ? effectiveName : undefined,
     });
 
     Sound.playSuccessChime();
     setLastSavedMessage(`¡Registrado! ${saved.productName} vence el ${selectedDay}/${selectedMonth}/${selectedYear}.`);
 
-    // Reset selection to keep camera free for next scan
-    setTimeout(() => {
-      setSelectedProduct(null);
-      setDetectedBarcode('');
-      setManualProductName('');
-      setLastSavedMessage(null);
-    }, 2500);
+    // Reset selection and reactivate camera automatically
+    setSelectedProduct(null);
+    setDetectedBarcode('');
+    setManualProductName('');
+    setTempAnnotation('');
+    setAnnotationError(null);
+    resumeCamera();
 
     setExpirations(ExpirationService.getExpirations());
     if (onDataUpdated) onDataUpdated();
+
+    setTimeout(() => {
+      setLastSavedMessage(null);
+    }, 3500);
   };
 
   const handleResolve = (id: string) => {
@@ -342,8 +407,10 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
         const q = searchQuery.toLowerCase();
         return (
           item.productName.toLowerCase().includes(q) ||
+          (item.tempProductName && item.tempProductName.toLowerCase().includes(q)) ||
           item.barcode.toLowerCase().includes(q) ||
-          (item.aisleName && item.aisleName.toLowerCase().includes(q))
+          (item.aisleName && item.aisleName.toLowerCase().includes(q)) ||
+          (item.notes && item.notes.toLowerCase().includes(q))
         );
       }
       return true;
@@ -401,21 +468,55 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
 
         {/* Reticle Overlay */}
         <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-          <div className="w-4/5 h-2/3 border-2 border-dashed border-teal-400/80 rounded-xl relative shadow-[0_0_20px_rgba(20,184,166,0.3)]">
-            <div className="absolute top-0 left-0 w-4 h-4 border-t-4 border-l-4 border-teal-400 -mt-1 -ml-1 rounded-tl" />
-            <div className="absolute top-0 right-0 w-4 h-4 border-t-4 border-r-4 border-teal-400 -mt-1 -mr-1 rounded-tr" />
-            <div className="absolute bottom-0 left-0 w-4 h-4 border-b-4 border-l-4 border-teal-400 -mb-1 -ml-1 rounded-bl" />
-            <div className="absolute bottom-0 right-0 w-4 h-4 border-b-4 border-r-4 border-teal-400 -mb-1 -mr-1 rounded-br" />
+          <div className={`w-4/5 h-2/3 border-2 border-dashed rounded-xl relative transition-all ${
+            isCameraFrozen
+              ? 'border-amber-400/90 shadow-[0_0_25px_rgba(251,191,36,0.4)]'
+              : 'border-teal-400/80 shadow-[0_0_20px_rgba(20,184,166,0.3)]'
+          }`}>
+            <div className={`absolute top-0 left-0 w-4 h-4 border-t-4 border-l-4 -mt-1 -ml-1 rounded-tl ${isCameraFrozen ? 'border-amber-400' : 'border-teal-400'}`} />
+            <div className={`absolute top-0 right-0 w-4 h-4 border-t-4 border-r-4 -mt-1 -mr-1 rounded-tr ${isCameraFrozen ? 'border-amber-400' : 'border-teal-400'}`} />
+            <div className={`absolute bottom-0 left-0 w-4 h-4 border-b-4 border-l-4 -mb-1 -ml-1 rounded-bl ${isCameraFrozen ? 'border-amber-400' : 'border-teal-400'}`} />
+            <div className={`absolute bottom-0 right-0 w-4 h-4 border-b-4 border-r-4 -mb-1 -mr-1 rounded-br ${isCameraFrozen ? 'border-amber-400' : 'border-teal-400'}`} />
 
-            <div className="w-full h-0.5 bg-gradient-to-r from-transparent via-teal-400 to-transparent animate-pulse absolute top-1/2 -translate-y-1/2" />
+            {!isCameraFrozen && (
+              <div className="w-full h-0.5 bg-gradient-to-r from-transparent via-teal-400 to-transparent animate-pulse absolute top-1/2 -translate-y-1/2" />
+            )}
           </div>
         </div>
 
+        {/* Frozen Indicator Overlay */}
+        {isCameraFrozen && (
+          <div className="absolute inset-0 bg-black/45 backdrop-blur-[1px] flex flex-col items-center justify-center p-3 text-center pointer-events-none z-10 animate-fade-in">
+            <div className="bg-black/85 border border-amber-400/70 rounded-2xl px-4 py-2.5 shadow-2xl max-w-xs space-y-1">
+              <div className="flex items-center justify-center gap-1.5 text-amber-300 text-xs font-bold">
+                <Pause className="w-3.5 h-3.5 text-amber-400" />
+                <span>Cámara Pausada / Visor Congelado</span>
+              </div>
+              <p className="text-[10px] text-zinc-300 leading-snug">
+                Código detectado con éxito. Interactúa con el formulario abajo sin peligro de reescaneo.
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Top Camera Controls */}
-        <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between pointer-events-auto">
-          <div className="flex items-center gap-1.5 bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-full border border-white/10 text-[11px] text-teal-300">
-            <span className="w-2 h-2 rounded-full bg-teal-400 animate-ping" />
-            <span>MLKit Escaneando continuo</span>
+        <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between pointer-events-auto z-20">
+          <div className={`flex items-center gap-1.5 backdrop-blur-md px-2.5 py-1 rounded-full border text-[11px] ${
+            isCameraFrozen
+              ? 'bg-amber-950/80 border-amber-500/40 text-amber-300'
+              : 'bg-black/60 border-white/10 text-teal-300'
+          }`}>
+            {isCameraFrozen ? (
+              <>
+                <Pause className="w-3 h-3 text-amber-400" />
+                <span>Captura pausada para edición</span>
+              </>
+            ) : (
+              <>
+                <span className="w-2 h-2 rounded-full bg-teal-400 animate-ping" />
+                <span>MLKit Escaneando continuo</span>
+              </>
+            )}
           </div>
 
           <div className="flex items-center gap-2">
@@ -508,19 +609,29 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
                   className="w-12 h-12 rounded-xl object-cover bg-white/5 border border-white/10"
                 />
               ) : (
-                <div className="w-12 h-12 rounded-xl bg-teal-500/20 border border-teal-500/30 text-teal-300 flex items-center justify-center font-bold text-sm">
-                  {selectedProduct?.name?.charAt(0) || 'P'}
+                <div className={`w-12 h-12 rounded-xl border flex items-center justify-center font-bold text-xs ${
+                  selectedProduct
+                    ? 'bg-teal-500/20 border-teal-500/30 text-teal-300'
+                    : 'bg-amber-500/20 border-amber-500/30 text-amber-300'
+                }`}>
+                  {selectedProduct ? (selectedProduct.name.charAt(0) || 'P') : 'NUEVO'}
                 </div>
               )}
               <div>
-                <span className="text-[10px] text-teal-400 font-bold uppercase tracking-wider block">
-                  Artículo Reconocido
-                </span>
-                <h3 className="text-sm font-bold text-white leading-tight">
-                  {selectedProduct ? selectedProduct.name : manualProductName}
+                <div className="flex items-center gap-2">
+                  <span className={`text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${
+                    selectedProduct
+                      ? 'text-teal-400 bg-teal-500/10 border border-teal-500/20'
+                      : 'text-amber-300 bg-amber-500/15 border border-amber-500/30'
+                  }`}>
+                    {selectedProduct ? 'Artículo en Catálogo' : '⚠️ Producto Sin Registrar'}
+                  </span>
+                </div>
+                <h3 className="text-sm font-bold text-white leading-tight mt-0.5">
+                  {selectedProduct ? selectedProduct.name : (tempAnnotation.trim() || 'Ingresar nombre temporal abajo')}
                 </h3>
-                <div className="flex items-center gap-2 text-[11px] text-zinc-400 mt-0.5">
-                  <span>Código: <strong className="text-zinc-200">{detectedBarcode || selectedProduct?.barcode}</strong></span>
+                <div className="flex items-center gap-2 text-[11px] text-zinc-400 mt-0.5 flex-wrap">
+                  <span>Código: <strong className="text-zinc-200 font-mono">{detectedBarcode || selectedProduct?.barcode}</strong></span>
                   {selectedProduct?.category && (
                     <span className="px-1.5 py-0.5 rounded-md bg-white/5 text-[10px] text-zinc-300">
                       {selectedProduct.category}
@@ -534,15 +645,54 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
             </div>
 
             <button
-              onClick={() => {
-                setSelectedProduct(null);
-                setDetectedBarcode('');
-              }}
-              className="p-1 text-zinc-400 hover:text-white rounded-lg"
+              type="button"
+              onClick={handleCancel}
+              className="p-1.5 text-zinc-400 hover:text-white rounded-lg bg-white/5 hover:bg-white/10 transition-colors"
+              title="Cancelar y reanudar cámara"
             >
               <X className="w-4 h-4" />
             </button>
           </div>
+
+          {/* 2. Campo OBLIGATORIO: Anotaciones / Nombre Temporal del Artículo si no está en catálogo */}
+          {!selectedProduct && (
+            <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 space-y-1.5 animate-fade-in">
+              <label htmlFor="input-temp-product-annotation" className="block text-xs font-bold text-amber-300 flex items-center justify-between">
+                <span>Anotaciones / Nombre Temporal del Artículo:</span>
+                <span className="text-[10px] text-rose-400 font-extrabold bg-rose-500/20 px-1.5 py-0.5 rounded border border-rose-500/30">
+                  * Obligatorio
+                </span>
+              </label>
+              <input
+                id="input-temp-product-annotation"
+                ref={tempInputRef}
+                type="text"
+                value={tempAnnotation}
+                onChange={(e) => {
+                  setTempAnnotation(e.target.value);
+                  if (annotationError && e.target.value.trim()) {
+                    setAnnotationError(null);
+                  }
+                }}
+                placeholder="Ej: Gatorade Manzana 500ml, Yogurt Frutilla 1L..."
+                className={`w-full px-3 py-2 rounded-xl bg-[#0e111a] border text-xs text-white placeholder-zinc-500 focus:outline-hidden transition-all ${
+                  annotationError
+                    ? 'border-rose-500 ring-1 ring-rose-500'
+                    : 'border-amber-500/40 focus:border-amber-400 focus:ring-1 focus:ring-amber-400/50'
+                }`}
+              />
+              {annotationError ? (
+                <p className="text-[10px] text-rose-400 font-bold flex items-center gap-1">
+                  <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+                  <span>{annotationError}</span>
+                </p>
+              ) : (
+                <p className="text-[10px] text-zinc-400">
+                  Escribe una descripción libre para saber con certeza qué producto físico retirar del estante en la alarma.
+                </p>
+              )}
+            </div>
+          )}
 
           {/* Quick Date Selector (Día / Mes / Año) */}
           <div className="bg-[#0e111a] border border-white/10 rounded-xl p-3 space-y-3">
@@ -757,17 +907,15 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => {
-                setSelectedProduct(null);
-                setDetectedBarcode('');
-              }}
-              className="w-1/3 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-zinc-300 text-xs font-semibold"
+              onClick={handleCancel}
+              className="w-1/3 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-zinc-300 text-xs font-semibold active:scale-95 transition-all"
             >
               Cancelar
             </button>
 
             <button
               type="button"
+              id="btn-save-expiration-agenda"
               onClick={handleSaveExpiration}
               className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-lg shadow-emerald-950/40 active:scale-98 transition-all"
             >
@@ -900,11 +1048,16 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
                         )}
                       </div>
 
-                      <h4 className="text-xs font-bold text-white leading-snug">
-                        {item.productName}
+                      <h4 className="text-xs sm:text-sm font-bold text-white leading-snug flex items-center gap-2 flex-wrap">
+                        <span>{item.tempProductName || item.productName}</span>
+                        {item.tempProductName && (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-semibold">
+                            Anotación Temporal
+                          </span>
+                        )}
                       </h4>
                       <p className="text-[11px] text-zinc-400 font-mono mt-0.5">
-                        Cod: {item.barcode}
+                        Cod: <strong className="text-zinc-200">{item.barcode}</strong>
                       </p>
                       {item.notes && (
                         <p className="text-[10px] text-zinc-400 mt-1 italic">
