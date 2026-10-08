@@ -21,6 +21,9 @@ export interface Product {
   notes?: string;
   lastUpdated: string;
   lastVerifiedAt?: string; // Fecha de verificación de góndola / inactividad (Góndola OK)
+  // Consolidación de stock y purga histórica de resguardo
+  baselineStock?: number; // Stock Inicial de Resguardo tras purga histórica
+  baselineStockDate?: string; // Fecha de corte de la consolidación de resguardo
   // Reposition status
   isPendingReposition?: boolean;
   repositionQuantity?: number; // Total net physical units

@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { Store, ShieldCheck, RotateCcw, Save, CheckCircle2, Lock, Tag, Plus, Bell, Volume2, AlertTriangle, Send, Sparkles } from 'lucide-react';
-import { StoreSettings, Category, Product } from '../types';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Store, ShieldCheck, RotateCcw, Save, CheckCircle2, Lock, Tag, Plus, Bell, Volume2, AlertTriangle, Send, Sparkles, Database, Trash2, Calendar, ShieldAlert, X } from 'lucide-react';
+import { StoreSettings, Category, Product, StockMovement, AppUser } from '../types';
 import { StorageService } from '../services/storage';
 import { NotificationService } from '../services/pushNotifications';
 
@@ -10,6 +10,8 @@ interface SettingsViewProps {
   onDataReload: () => void;
   categories?: Category[];
   products?: Product[];
+  movements?: StockMovement[];
+  currentUser?: AppUser | null;
   onManageCategories?: () => void;
 }
 
@@ -19,6 +21,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onDataReload,
   categories = [],
   products = [],
+  movements = [],
+  currentUser,
   onManageCategories,
 }) => {
   const [form, setForm] = useState<StoreSettings>(settings);
@@ -26,6 +30,71 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [permissionStatus, setPermissionStatus] = useState<NotificationPermission>('default');
   const [isTestingPush, setIsTestingPush] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
+
+  // Estados de Purga Histórica Segura (Exclusivo Administrador)
+  const [purgeStartDate, setPurgeStartDate] = useState<string>('');
+  const [purgeEndDate, setPurgeEndDate] = useState<string>(() => {
+    // Por defecto, sugerir fecha de corte de hace 30 días
+    const d = new Date();
+    d.setDate(d.getDate() - 30);
+    return d.toISOString().slice(0, 10);
+  });
+  const [isPurging, setIsPurging] = useState<boolean>(false);
+  const [purgeModalOpen, setPurgeModalOpen] = useState<boolean>(false);
+  const [purgeResult, setPurgeResult] = useState<{
+    success: boolean;
+    message: string;
+    purgedCount: number;
+    affectedProductsCount: number;
+    remainingCount: number;
+  } | null>(null);
+
+  const isAdmin = currentUser?.role === 'admin' || !currentUser?.role;
+
+  // Lista viva de movimientos locales
+  const allLocalMovements = useMemo(() => {
+    return movements.length > 0 ? movements : StorageService.getMovements();
+  }, [movements]);
+
+  // Cálculo en vivo de movimientos que entran en el rango a purgar
+  const previewMovementsToPurge = useMemo(() => {
+    const startMs = purgeStartDate ? new Date(`${purgeStartDate}T00:00:00`).getTime() : 0;
+    const endMs = purgeEndDate ? new Date(`${purgeEndDate}T23:59:59.999`).getTime() : Date.now();
+    return allLocalMovements.filter((m) => {
+      const t = new Date(m.timestamp).getTime();
+      return t >= startMs && t <= endMs;
+    });
+  }, [allLocalMovements, purgeStartDate, purgeEndDate]);
+
+  const setPurgePresetDays = (days: number) => {
+    const d = new Date();
+    d.setDate(d.getDate() - days);
+    setPurgeStartDate('');
+    setPurgeEndDate(d.toISOString().slice(0, 10));
+  };
+
+  const handleExecutePurge = () => {
+    setIsPurging(true);
+    try {
+      const res = StorageService.purgeHistoricalMovements({
+        startDate: purgeStartDate || undefined,
+        endDate: purgeEndDate || undefined,
+      });
+      setPurgeResult(res);
+      setPurgeModalOpen(false);
+      onDataReload();
+    } catch (e: any) {
+      setPurgeResult({
+        success: false,
+        message: 'Error al ejecutar la purga histórica: ' + (e?.message || e),
+        purgedCount: 0,
+        affectedProductsCount: 0,
+        remainingCount: allLocalMovements.length,
+      });
+    } finally {
+      setIsPurging(false);
+    }
+  };
 
   useEffect(() => {
     setPermissionStatus(NotificationService.getPermission());
@@ -394,6 +463,233 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             })}
         </div>
       </div>
+
+      {/* ========================================================================= */}
+      {/* REGLA 2 & 3: FUNCIÓN DE PURGA HISTÓRICA SEGURA (MANTENIMIENTO DE BD)     */}
+      {/* Exclusiva para Rol Administrador con Consolidación Matemática de Stock   */}
+      {/* ========================================================================= */}
+      {isAdmin && (
+        <div
+          id="purge-maintenance-panel"
+          className="bg-gradient-to-br from-[#18151b] via-[#161922] to-[#121620] border border-rose-500/30 rounded-2xl p-4 space-y-4 shadow-xl"
+        >
+          <div className="flex items-start justify-between border-b border-white/5 pb-3">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-500/20 text-rose-400 flex items-center justify-center font-bold shadow-inner flex-shrink-0">
+                <Database className="w-5 h-5 text-rose-400" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-bold text-white">
+                    Mantenimiento de Base de Datos
+                  </h3>
+                  <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                    Solo Administrador
+                  </span>
+                </div>
+                <p className="text-[11px] text-zinc-400">
+                  Purga Histórica Segura: Limpieza de almacenamiento sin alterar existencias
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Explicación de la Lógica de Consolidación Matemática */}
+          <div className="p-3 rounded-xl bg-black/40 border border-white/5 text-[11px] text-zinc-300 space-y-1.5 leading-relaxed">
+            <div className="flex items-center gap-1.5 font-bold text-teal-300">
+              <ShieldCheck className="w-4 h-4 text-teal-400 flex-shrink-0" />
+              <span>Consolidación Matemática Garantizada (No altera el Stock)</span>
+            </div>
+            <p className="text-zinc-400">
+              Al purgar movimientos antiguos, el sistema calcula el balance neto de cada producto hasta la fecha de corte y lo almacena permanentemente como <strong className="text-teal-300">Stock Inicial de Resguardo</strong>. Los renglones antiguos se eliminan para liberar memoria en el celular, mientras que las existencias superiores (como las 141 unidades de talco) <strong className="text-white">permanecen 100% exactas e intactas</strong>.
+            </p>
+          </div>
+
+          {/* Selector de Rango de Fecha de Purga */}
+          <div className="space-y-2 bg-[#0e1017] p-3 rounded-xl border border-white/5">
+            <div className="flex items-center justify-between">
+              <label className="text-[11px] font-semibold text-zinc-300 flex items-center gap-1.5">
+                <Calendar className="w-3.5 h-3.5 text-rose-400" />
+                <span>Rango de Fecha para Purgar Movimientos:</span>
+              </label>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setPurgePresetDays(30)}
+                  className="px-2 py-0.5 rounded bg-white/5 hover:bg-white/10 text-[10px] text-zinc-300 font-medium transition-colors"
+                >
+                  &gt; 30 días
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPurgePresetDays(60)}
+                  className="px-2 py-0.5 rounded bg-white/5 hover:bg-white/10 text-[10px] text-zinc-300 font-medium transition-colors"
+                >
+                  &gt; 60 días
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPurgeStartDate('');
+                    setPurgeEndDate(new Date().toISOString().slice(0, 10));
+                  }}
+                  className="px-2 py-0.5 rounded bg-white/5 hover:bg-white/10 text-[10px] text-zinc-300 font-medium transition-colors"
+                >
+                  Todo
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2.5 pt-1">
+              <div>
+                <span className="block text-[10px] text-zinc-400 mb-0.5">Desde (opcional):</span>
+                <input
+                  id="purge-date-start"
+                  type="date"
+                  value={purgeStartDate}
+                  onChange={(e) => setPurgeStartDate(e.target.value)}
+                  className="w-full bg-[#161922] border border-white/10 rounded-xl px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-rose-400 font-mono"
+                />
+              </div>
+              <div>
+                <span className="block text-[10px] text-zinc-400 mb-0.5">Hasta fecha de corte:</span>
+                <input
+                  id="purge-date-end"
+                  type="date"
+                  value={purgeEndDate}
+                  onChange={(e) => setPurgeEndDate(e.target.value)}
+                  className="w-full bg-[#161922] border border-white/10 rounded-xl px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-rose-400 font-mono"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Estadísticas de impacto antes de ejecutar */}
+          <div className="grid grid-cols-3 gap-2 text-center text-xs">
+            <div className="p-2.5 bg-[#0e1017] rounded-xl border border-white/5">
+              <p className="text-[10px] text-zinc-400">Total en Teléfono</p>
+              <p className="text-sm font-bold text-white mt-0.5 font-mono">
+                {allLocalMovements.length}
+              </p>
+              <p className="text-[9px] text-zinc-500">movimientos</p>
+            </div>
+
+            <div className="p-2.5 bg-rose-950/20 rounded-xl border border-rose-500/20">
+              <p className="text-[10px] text-rose-300">A Purgar</p>
+              <p className="text-sm font-bold text-rose-400 mt-0.5 font-mono">
+                {previewMovementsToPurge.length}
+              </p>
+              <p className="text-[9px] text-rose-300/70">se eliminarán</p>
+            </div>
+
+            <div className="p-2.5 bg-teal-950/20 rounded-xl border border-teal-500/20">
+              <p className="text-[10px] text-teal-300">Sobrevivientes</p>
+              <p className="text-sm font-bold text-teal-400 mt-0.5 font-mono">
+                {Math.max(0, allLocalMovements.length - previewMovementsToPurge.length)}
+              </p>
+              <p className="text-[9px] text-teal-300/70">quedarán activos</p>
+            </div>
+          </div>
+
+          {/* Botón Principal de Purga */}
+          <button
+            id="btn-purge-movements"
+            type="button"
+            disabled={previewMovementsToPurge.length === 0 || isPurging}
+            onClick={() => setPurgeModalOpen(true)}
+            className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-rose-500 via-rose-600 to-rose-700 hover:from-rose-400 hover:to-rose-600 active:scale-98 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-rose-900/30 transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Trash2 className="w-4 h-4" />
+            <span>
+              {previewMovementsToPurge.length === 0
+                ? 'No hay movimientos en este rango'
+                : `Borrar movimientos históricos por rango de fecha (${previewMovementsToPurge.length})`}
+            </span>
+          </button>
+
+          {/* Resultado de la purga ejecutada */}
+          {purgeResult && (
+            <div
+              className={`p-3 rounded-xl border flex items-start gap-2.5 text-xs animate-fade-in ${
+                purgeResult.success
+                  ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200'
+                  : 'bg-rose-950/40 border-rose-500/40 text-rose-200'
+              }`}
+            >
+              {purgeResult.success ? (
+                <CheckCircle2 className="w-5 h-5 text-emerald-400 flex-shrink-0 mt-0.5" />
+              ) : (
+                <AlertTriangle className="w-5 h-5 text-rose-400 flex-shrink-0 mt-0.5" />
+              )}
+              <div className="space-y-1">
+                <p className="font-bold text-white">
+                  {purgeResult.success ? '¡Purga completada con éxito!' : 'Error en la purga'}
+                </p>
+                <p className="text-[11px] leading-relaxed text-zinc-300">
+                  {purgeResult.message}
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Modal de Confirmación de Purga Histórica */}
+      {purgeModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 animate-fade-in">
+          <div className="w-full max-w-sm bg-[#161922] border border-rose-500/40 rounded-3xl p-5 shadow-2xl space-y-4 animate-scale-up">
+            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <div className="flex items-center gap-2 text-rose-400 font-bold text-sm">
+                <ShieldAlert className="w-5 h-5 text-rose-400" />
+                <span>Confirmar Purga Histórica</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPurgeModalOpen(false)}
+                className="p-1 text-zinc-400 hover:text-white rounded-lg"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="text-xs text-zinc-300 space-y-2">
+              <p>
+                Estás a punto de borrar físicamente <strong className="text-rose-400 font-mono">{previewMovementsToPurge.length} movimientos antiguos</strong> del almacenamiento de este dispositivo.
+              </p>
+              <div className="p-3 bg-black/40 rounded-xl border border-white/5 text-[11px] space-y-1">
+                <p className="text-teal-300 font-semibold flex items-center gap-1">
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  Garantía de Consolidación Matemática:
+                </p>
+                <p className="text-zinc-400">
+                  El stock físico de tus productos NO cambiará. Se guardará el "Stock Inicial de Resguardo" para que las existencias actuales se mantengan 100% exactas e idénticas.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setPurgeModalOpen(false)}
+                disabled={isPurging}
+                className="flex-1 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-xs font-semibold text-zinc-300 transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                id="btn-confirm-purge-execute"
+                onClick={handleExecutePurge}
+                disabled={isPurging}
+                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-xs font-bold text-white shadow-lg shadow-rose-900/40 flex items-center justify-center gap-1.5 transition-all"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>{isPurging ? 'Purgando...' : 'Confirmar Purga'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Reset catalogue */}
       <div className="pt-2">

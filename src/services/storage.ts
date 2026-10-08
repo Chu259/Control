@@ -925,8 +925,9 @@ export const StorageService = {
 
       const allProdMovements = [...directMovements, ...barcodeMovements];
       const unitsPerBulk = Math.max(1, Number(p.unitsPerBulk) || 12);
+      const baseStock = Number(p.baselineStock) || 0;
 
-      if (allProdMovements.length > 0) {
+      if (allProdMovements.length > 0 || p.baselineStock !== undefined) {
         let inSum = 0;
         let outSum = 0;
         for (const m of allProdMovements) {
@@ -937,7 +938,8 @@ export const StorageService = {
             outSum += qty;
           }
         }
-        const netStock = Math.max(0, inSum - outSum);
+        // Consolidación Matemática: Stock Inicial de Resguardo + Entradas - Salidas
+        const netStock = Math.max(0, baseStock + inSum - outSum);
         if (p.stock !== netStock) {
           updatedCount++;
         }
@@ -963,6 +965,162 @@ export const StorageService = {
     }
 
     return { products: updatedProducts, updatedCount };
+  },
+
+  /**
+   * Función de "Purga Histórica Segura" (Mantenimiento de Base de Datos):
+   * Permite al Administrador borrar movimientos históricos por rango de fecha.
+   * Lógica de Consolidación Matemática (No alterar el Stock):
+   * 1. Calcula el balance neto de los productos dentro del rango purgado.
+   * 2. Almacena ese valor acumulado de forma fija como "Stock Inicial de Resguardo" (baselineStock).
+   * 3. Elimina de forma segura los renglones físicos del historial antiguo de la BD local para liberar almacenamiento.
+   * 4. Recalcula las existencias sumando el "Stock Inicial de Resguardo" + movimientos sobrevivientes,
+   *    manteniendo los totales superiores (como las 141 unidades de talco) 100% exactos e intactos.
+   */
+  purgeHistoricalMovements(options: {
+    startDate?: string; // YYYY-MM-DD
+    endDate?: string;   // YYYY-MM-DD
+  }): {
+    success: boolean;
+    message: string;
+    purgedCount: number;
+    affectedProductsCount: number;
+    remainingCount: number;
+  } {
+    try {
+      const allMovements = this.getMovements();
+      if (allMovements.length === 0) {
+        return {
+          success: false,
+          message: 'No hay movimientos registrados en el historial para purgar.',
+          purgedCount: 0,
+          affectedProductsCount: 0,
+          remainingCount: 0,
+        };
+      }
+
+      const startMs = options.startDate
+        ? new Date(`${options.startDate}T00:00:00`).getTime()
+        : 0;
+      const endMs = options.endDate
+        ? new Date(`${options.endDate}T23:59:59.999`).getTime()
+        : Date.now();
+
+      const movementsToPurge = allMovements.filter((m) => {
+        const mTime = new Date(m.timestamp).getTime();
+        return mTime >= startMs && mTime <= endMs;
+      });
+
+      if (movementsToPurge.length === 0) {
+        return {
+          success: false,
+          message: 'No se encontraron movimientos dentro del rango de fecha seleccionado.',
+          purgedCount: 0,
+          affectedProductsCount: 0,
+          remainingCount: allMovements.length,
+        };
+      }
+
+      const purgeIds = new Set(movementsToPurge.map((m) => m.id));
+      const remainingMovements = allMovements.filter((m) => !purgeIds.has(m.id));
+
+      const products = this.getProducts();
+      let affectedProductsCount = 0;
+
+      // Calcular el impacto neto de los movimientos purgados para cada producto
+      const updatedProducts = products.map((p) => {
+        const cleanBarUnit = (p.barcodeUnit || '').trim().toLowerCase();
+        const cleanBar = (p.barcode || '').trim().toLowerCase();
+        const cleanBarBulk = (p.barcodeBulk || '').trim().toLowerCase();
+
+        const prodPurgedMovements = movementsToPurge.filter((m) => {
+          if (m.productId === p.id) return true;
+          const mBar = (m.barcode || '').trim().toLowerCase();
+          const mScan = (m.barcodeScanned || '').trim().toLowerCase();
+          return (
+            (cleanBarUnit && (mBar === cleanBarUnit || mScan === cleanBarUnit)) ||
+            (cleanBar && (mBar === cleanBar || mScan === cleanBar)) ||
+            (cleanBarBulk && (mBar === cleanBarBulk || mScan === cleanBarBulk))
+          );
+        });
+
+        if (prodPurgedMovements.length > 0) {
+          let purgedIn = 0;
+          let purgedOut = 0;
+          for (const m of prodPurgedMovements) {
+            const qty = Number(m.quantity) || 0;
+            if (m.type === 'in') purgedIn += qty;
+            else if (m.type === 'out') purgedOut += qty;
+          }
+          const netPurged = purgedIn - purgedOut;
+          affectedProductsCount++;
+
+          // Calcular balance de movimientos sobrevivientes para este producto
+          const prodSurvivingMovements = remainingMovements.filter((m) => {
+            if (m.productId === p.id) return true;
+            const mBar = (m.barcode || '').trim().toLowerCase();
+            const mScan = (m.barcodeScanned || '').trim().toLowerCase();
+            return (
+              (cleanBarUnit && (mBar === cleanBarUnit || mScan === cleanBarUnit)) ||
+              (cleanBar && (mBar === cleanBar || mScan === cleanBar)) ||
+              (cleanBarBulk && (mBar === cleanBarBulk || mScan === cleanBarBulk))
+            );
+          });
+          let survivingIn = 0;
+          let survivingOut = 0;
+          for (const sm of prodSurvivingMovements) {
+            const qty = Number(sm.quantity) || 0;
+            if (sm.type === 'in') survivingIn += qty;
+            else if (sm.type === 'out') survivingOut += qty;
+          }
+          const netSurviving = survivingIn - survivingOut;
+
+          // Consolidación Matemática Fija:
+          // Stock Inicial de Resguardo = balance acumulado hasta la fecha de corte
+          let newBaseline: number;
+          if (p.baselineStock !== undefined) {
+            newBaseline = Math.max(0, Number(p.baselineStock) + netPurged);
+          } else {
+            newBaseline = Math.max(0, Number(p.stock) - netSurviving);
+          }
+
+          return {
+            ...p,
+            baselineStock: newBaseline,
+            baselineStockDate: new Date().toISOString(),
+          };
+        }
+
+        return p;
+      });
+
+      // Guardar productos y movimientos tras purga
+      this.saveProducts(updatedProducts);
+      this.saveMovements(remainingMovements);
+
+      // Recalcular stock matemático final unificado
+      this.recalculateStockFromMovements(updatedProducts, remainingMovements);
+
+      // Respaldo silencioso en la nube
+      CloudBackupService.triggerAutoBackup();
+
+      return {
+        success: true,
+        message: `Purga histórica completada con éxito. Se eliminaron ${movementsToPurge.length} movimientos antiguos de la base de datos local y se consolidó el Stock Inicial de Resguardo de ${affectedProductsCount} producto(s). Los totales de unidades y bultos permanecen 100% exactos e intactos.`,
+        purgedCount: movementsToPurge.length,
+        affectedProductsCount,
+        remainingCount: remainingMovements.length,
+      };
+    } catch (e: any) {
+      console.error('Error in purgeHistoricalMovements:', e);
+      return {
+        success: false,
+        message: 'Error al purgar movimientos: ' + (e?.message || e),
+        purgedCount: 0,
+        affectedProductsCount: 0,
+        remainingCount: 0,
+      };
+    }
   },
 
   /**
@@ -1089,6 +1247,8 @@ export const StorageService = {
             unit: existingInMap.unit || inc.unit || 'uds',
             notes: existingInMap.notes || inc.notes,
             lastVerifiedAt: existingInMap.lastVerifiedAt || inc.lastVerifiedAt,
+            baselineStock: existingInMap.baselineStock !== undefined ? existingInMap.baselineStock : inc.baselineStock,
+            baselineStockDate: existingInMap.baselineStockDate || inc.baselineStockDate,
             lastUpdated: new Date().toISOString(),
           };
 
@@ -1106,6 +1266,8 @@ export const StorageService = {
             bulkUnitName: inc.bulkUnitName || `Caja x${unitsPerBulk}`,
             barcode: inc.barcodeUnit || inc.barcode,
             barcodeUnit: inc.barcodeUnit || inc.barcode,
+            baselineStock: inc.baselineStock,
+            baselineStockDate: inc.baselineStockDate,
             lastUpdated: new Date().toISOString(),
           };
 

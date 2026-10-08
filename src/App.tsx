@@ -902,6 +902,8 @@ export default function App() {
               onDataReload={reloadAllData}
               categories={categories}
               products={products}
+              movements={movements}
+              currentUser={currentUser}
               onManageCategories={() => setCategoryManagerOpen(true)}
             />
           )}

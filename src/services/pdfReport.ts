@@ -8,6 +8,11 @@ export interface ReportOptions {
   includeLowStockOnly?: boolean;
   categoryFilter?: string;
   includeMovements?: boolean;
+  startDate?: string; // YYYY-MM-DD
+  endDate?: string;   // YYYY-MM-DD
+  userFilter?: string; // 'all' or userId / userName
+  userNameLabel?: string;
+  movementTypeFilter?: 'all' | 'in' | 'out';
 }
 
 export function buildInventoryPDFDoc(
@@ -224,8 +229,33 @@ export function buildInventoryPDFDoc(
     y += 5.5;
   });
 
-  // Section 3: Recent Movements
-  if (options.includeMovements !== false && movements.length > 0) {
+  // Section 3: Recent Audited Movements
+  if (options.includeMovements !== false) {
+    // 1. Filtrar movimientos por fecha, usuario y tipo
+    let auditedMovements = [...movements];
+
+    if (options.startDate) {
+      const startMs = new Date(`${options.startDate}T00:00:00`).getTime();
+      auditedMovements = auditedMovements.filter((m) => new Date(m.timestamp).getTime() >= startMs);
+    }
+    if (options.endDate) {
+      const endMs = new Date(`${options.endDate}T23:59:59.999`).getTime();
+      auditedMovements = auditedMovements.filter((m) => new Date(m.timestamp).getTime() <= endMs);
+    }
+
+    if (options.userFilter && options.userFilter !== 'all') {
+      const filterKey = options.userFilter.toLowerCase();
+      auditedMovements = auditedMovements.filter(
+        (m) =>
+          (m.userId && m.userId.toLowerCase() === filterKey) ||
+          (m.userName && m.userName.toLowerCase().includes(filterKey))
+      );
+    }
+
+    if (options.movementTypeFilter && options.movementTypeFilter !== 'all') {
+      auditedMovements = auditedMovements.filter((m) => m.type === options.movementTypeFilter);
+    }
+
     y += 6;
     checkPageBreak(30);
     doc.setFillColor(16, 185, 129);
@@ -234,61 +264,102 @@ export function buildInventoryPDFDoc(
     doc.setFontSize(11);
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(30, 41, 59);
-    doc.text(`REGISTRO DE MOVIMIENTOS RECIENTES (${Math.min(movements.length, 25)})`, 20, y + 5);
-    y += 10;
+    doc.text(`REGISTRO DE MOVIMIENTOS AUDITADOS (${auditedMovements.length})`, 20, y + 5);
+    y += 8;
 
+    // Subtítulo con resumen de filtros activos
+    const dateRangeStr =
+      options.startDate || options.endDate
+        ? `${options.startDate || 'Inicio'} hasta ${options.endDate || 'Hoy'}`
+        : 'Historial completo';
+    const userStr = options.userNameLabel || (options.userFilter && options.userFilter !== 'all' ? options.userFilter : 'Todos los usuarios');
+    const typeStr =
+      options.movementTypeFilter === 'in'
+        ? 'Solo Entradas'
+        : options.movementTypeFilter === 'out'
+        ? 'Solo Salidas'
+        : 'Entradas y Salidas';
+
+    doc.setFontSize(7.5);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(100, 116, 139);
+    doc.text(`Auditoría: Fechas: ${dateRangeStr}  •  Operario: ${userStr}  •  Tipo: ${typeStr}`, 14, y + 3.5);
+    y += 6;
+
+    // Table Header
     doc.setFillColor(241, 245, 249);
     doc.rect(14, y, pageWidth - 28, 6, 'F');
     doc.setFontSize(7.5);
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(71, 85, 105);
-    doc.text('Fecha', 16, y + 4.2);
-    doc.text('Tipo', 50, y + 4.2);
-    doc.text('Producto', 75, y + 4.2);
-    doc.text('Presentación', 130, y + 4.2);
-    doc.text('Cantidad', 158, y + 4.2);
-    doc.text('Balance Stock', 178, y + 4.2);
+    doc.text('Fecha / Hora', 16, y + 4.2);
+    doc.text('Operario', 48, y + 4.2);
+    doc.text('Tipo', 80, y + 4.2);
+    doc.text('Producto', 102, y + 4.2);
+    doc.text('Cantidad', 154, y + 4.2);
+    doc.text('Balance Stock', 174, y + 4.2);
     y += 7;
 
-    movements.slice(0, 25).forEach((m, idx) => {
-      checkPageBreak(6);
-      if (idx % 2 === 1) {
-        doc.setFillColor(248, 250, 252);
-        doc.rect(14, y - 1, pageWidth - 28, 5.5, 'F');
-      }
+    if (auditedMovements.length === 0) {
+      checkPageBreak(12);
+      doc.setFillColor(248, 250, 252);
+      doc.rect(14, y, pageWidth - 28, 10, 'F');
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(140, 149, 160);
+      doc.text('No se encontraron movimientos registrados que coincidan con los filtros seleccionados.', 18, y + 6);
+      y += 12;
+    } else {
+      // Mostrar movimientos auditados (hasta 150 para optimizar peso)
+      const listToRender = auditedMovements.slice(0, 150);
+      listToRender.forEach((m, idx) => {
+        checkPageBreak(6);
+        if (idx % 2 === 1) {
+          doc.setFillColor(248, 250, 252);
+          doc.rect(14, y - 1, pageWidth - 28, 5.5, 'F');
+        }
 
-      const dateShort = new Date(m.timestamp).toLocaleString('es-ES', {
-        dateStyle: 'short',
-        timeStyle: 'short',
+        const dateShort = new Date(m.timestamp).toLocaleString('es-ES', {
+          dateStyle: 'short',
+          timeStyle: 'short',
+        });
+
+        doc.setFontSize(7);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(100, 116, 139);
+        doc.text(dateShort, 16, y + 3);
+
+        const opName = (m.userName || 'Sistema').substring(0, 16);
+        doc.text(opName, 48, y + 3);
+
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(m.type === 'in' ? 16 : 225, m.type === 'in' ? 185 : 29, m.type === 'in' ? 129 : 72);
+        doc.text(m.type === 'in' ? 'ENTRADA' : 'SALIDA', 80, y + 3);
+
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(30, 41, 59);
+        doc.text(m.productName.substring(0, 24), 102, y + 3);
+
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(m.type === 'in' ? 16 : 225, m.type === 'in' ? 185 : 29, m.type === 'in' ? 129 : 72);
+        doc.text(`${m.type === 'in' ? '+' : '-'}${m.quantity} uds`, 154, y + 3);
+
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(100, 116, 139);
+        doc.text(`${m.previousStock} -> ${m.newStock}`, 174, y + 3);
+
+        y += 5.5;
       });
 
-      doc.setFontSize(7.5);
-      doc.setFont('helvetica', 'normal');
-      doc.setTextColor(100, 116, 139);
-      doc.text(dateShort, 16, y + 3);
-
-      doc.setFont('helvetica', 'bold');
-      doc.setTextColor(m.type === 'in' ? 16 : 225, m.type === 'in' ? 185 : 29, m.type === 'in' ? 129 : 72);
-      doc.text(m.type === 'in' ? 'ENTRADA' : 'SALIDA', 50, y + 3);
-
-      doc.setFont('helvetica', 'normal');
-      doc.setTextColor(30, 41, 59);
-      doc.text(m.productName.substring(0, 28), 75, y + 3);
-
-      doc.setTextColor(100, 116, 139);
-      const isBulk = m.format === 'bulk' || m.unitType === 'bulk';
-      doc.text(isBulk ? `Bulto (${m.bulkQuantity || 1} cj)` : 'Unidades', 130, y + 3);
-
-      doc.setFont('helvetica', 'bold');
-      doc.setTextColor(m.type === 'in' ? 16 : 225, m.type === 'in' ? 185 : 29, m.type === 'in' ? 129 : 72);
-      doc.text(`${m.type === 'in' ? '+' : '-'}${m.quantity} uds`, 158, y + 3);
-
-      doc.setFont('helvetica', 'normal');
-      doc.setTextColor(100, 116, 139);
-      doc.text(`${m.previousStock} -> ${m.newStock}`, 178, y + 3);
-
-      y += 5.5;
-    });
+      if (auditedMovements.length > 150) {
+        checkPageBreak(8);
+        doc.setFontSize(7.5);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(140, 149, 160);
+        doc.text(`... y ${auditedMovements.length - 150} movimiento(s) adicionales en el periodo auditado.`, 16, y + 4);
+        y += 6;
+      }
+    }
   }
 
   // Footer on all pages
