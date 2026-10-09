@@ -20,12 +20,30 @@ import {
   ExternalLink,
   Barcode as BarcodeIcon,
   Pause,
+  RotateCw,
+  Lock,
 } from 'lucide-react';
 import { Product, ExpirationItem } from '../types';
 import { StorageService } from '../services/storage';
 import { ExpirationService } from '../services/expirationService';
 import { Sound } from '../services/sound';
 import { CloudBackupService } from './../services/cloudBackupService';
+import { CyclicWheelPickerModal } from './CyclicWheelPickerModal';
+
+const SPANISH_MONTH_NAMES = [
+  'Enero',
+  'Febrero',
+  'Marzo',
+  'Abril',
+  'Mayo',
+  'Junio',
+  'Julio',
+  'Agosto',
+  'Septiembre',
+  'Octubre',
+  'Noviembre',
+  'Diciembre',
+];
 
 interface ExpirationsViewProps {
   products: Product[];
@@ -66,18 +84,21 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
   const [manualProductName, setManualProductName] = useState('');
   const [detectedBarcode, setDetectedBarcode] = useState('');
 
-  // Cuadro de Anotaciones / Nombre Temporal del Artículo para productos nuevos
-  const [tempAnnotation, setTempAnnotation] = useState('');
+  // Cuadro de "Anotaciones / Nombre de Lote" visible SIEMPRE (Obligatorio para nuevos / Opcional para existentes)
+  const [notesOrAnnotation, setNotesOrAnnotation] = useState('');
   const [annotationError, setAnnotationError] = useState<string | null>(null);
-  const tempInputRef = useRef<HTMLInputElement | null>(null);
+  const notesInputRef = useRef<HTMLInputElement | null>(null);
 
   // Quick date selector state (Día / Mes / Año)
   const today = new Date();
   const [selectedDay, setSelectedDay] = useState<number>(today.getDate());
   const [selectedMonth, setSelectedMonth] = useState<number>(today.getMonth() + 1); // 1-12
-  const [selectedYear, setSelectedYear] = useState<number>(today.getFullYear());
-  const [notes, setNotes] = useState('Control visual fin de mes');
+  const [selectedYear, setSelectedYear] = useState<number>(2026); // Congelado automáticamente en el año en curso (2026)
   const [lastSavedMessage, setLastSavedMessage] = useState<string | null>(null);
+
+  // Modal selector rodillo nativo (bucle infinito 360°)
+  const [isRollerModalOpen, setIsRollerModalOpen] = useState(false);
+  const [rollerInitialTab, setRollerInitialTab] = useState<'day' | 'month'>('day');
 
   // Sync state on external updates
   useEffect(() => {
@@ -240,18 +261,18 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
     if (found) {
       setSelectedProduct(found);
       setManualProductName(found.name);
-      setTempAnnotation('');
+      setNotesOrAnnotation('');
     } else {
       setSelectedProduct(null);
       setManualProductName('');
-      setTempAnnotation('');
+      setNotesOrAnnotation('');
       setTimeout(() => {
-        tempInputRef.current?.focus();
+        notesInputRef.current?.focus();
       }, 150);
     }
 
-    // Default expiration date: end of current month
-    const curYear = today.getFullYear();
+    // Default expiration date: end of current month (Año congelado en 2026)
+    const curYear = 2026;
     const curMonth = today.getMonth() + 1;
     const lastDayOfMonth = new Date(curYear, curMonth, 0).getDate();
     setSelectedYear(curYear);
@@ -327,24 +348,28 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
     setSelectedProduct(null);
     setDetectedBarcode('');
     setManualProductName('');
-    setTempAnnotation('');
+    setNotesOrAnnotation('');
     setAnnotationError(null);
+    setIsRollerModalOpen(false);
     resumeCamera();
   };
 
   // Save expiration logic
   const handleSaveExpiration = () => {
-    // 2. Cuadro de "Anotaciones / Nombre Temporal" obligatorio si el producto no está en el catálogo
+    // 2. Cuadro de "Anotaciones / Nombre de Lote":
+    // - Si el producto es NUEVO: OBLIGATORIO para escribir su nombre descriptivo.
+    // - Si el producto YA EXISTE: OPCIONAL (puede dejarse vacío sin trabar el guardado).
     if (!selectedProduct) {
-      if (!tempAnnotation.trim()) {
-        setAnnotationError('Debes ingresar las anotaciones o el nombre temporal del artículo.');
+      if (!notesOrAnnotation.trim()) {
+        setAnnotationError('Debes ingresar las anotaciones o el nombre descriptivo del artículo.');
         Sound.playWarningBeep();
-        tempInputRef.current?.focus();
+        notesInputRef.current?.focus();
         return;
       }
     }
 
-    const effectiveName = selectedProduct ? selectedProduct.name : tempAnnotation.trim();
+    const effectiveName = selectedProduct ? selectedProduct.name : notesOrAnnotation.trim();
+    const effectiveNotes = notesOrAnnotation.trim() || 'Control visual fin de mes';
 
     const prodToSave: Product = selectedProduct || {
       id: `custom-${Date.now()}`,
@@ -363,7 +388,7 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
     const saved = ExpirationService.addExpiration({
       product: prodToSave,
       expirationDate: expirationDateStr,
-      notes: notes.trim() || 'Control visual fin de mes',
+      notes: effectiveNotes,
       tempProductName: !selectedProduct ? effectiveName : undefined,
     });
 
@@ -374,8 +399,9 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
     setSelectedProduct(null);
     setDetectedBarcode('');
     setManualProductName('');
-    setTempAnnotation('');
+    setNotesOrAnnotation('');
     setAnnotationError(null);
+    setIsRollerModalOpen(false);
     resumeCamera();
 
     setExpirations(ExpirationService.getExpirations());
@@ -628,7 +654,7 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
                   </span>
                 </div>
                 <h3 className="text-sm font-bold text-white leading-tight mt-0.5">
-                  {selectedProduct ? selectedProduct.name : (tempAnnotation.trim() || 'Ingresar nombre temporal abajo')}
+                  {selectedProduct ? selectedProduct.name : (notesOrAnnotation.trim() || 'Ingresar nombre temporal abajo')}
                 </h3>
                 <div className="flex items-center gap-2 text-[11px] text-zinc-400 mt-0.5 flex-wrap">
                   <span>Código: <strong className="text-zinc-200 font-mono">{detectedBarcode || selectedProduct?.barcode}</strong></span>
@@ -654,47 +680,75 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
             </button>
           </div>
 
-          {/* 2. Campo OBLIGATORIO: Anotaciones / Nombre Temporal del Artículo si no está en catálogo */}
-          {!selectedProduct && (
-            <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 space-y-1.5 animate-fade-in">
-              <label htmlFor="input-temp-product-annotation" className="block text-xs font-bold text-amber-300 flex items-center justify-between">
-                <span>Anotaciones / Nombre Temporal del Artículo:</span>
-                <span className="text-[10px] text-rose-400 font-extrabold bg-rose-500/20 px-1.5 py-0.5 rounded border border-rose-500/30">
+          {/* 2. Cuadro de "Anotaciones / Nombre de Lote" FISICAMENTE VISIBLE SIEMPRE */}
+          {/* - Obligatorio para producto nuevo (sin registrar) */}
+          {/* - Opcional para producto existente en catálogo */}
+          <div
+            id="field-notes-annotation-card"
+            className={`rounded-2xl p-3.5 space-y-1.5 transition-all ${
+              !selectedProduct
+                ? 'bg-amber-500/10 border-2 border-amber-500/40 shadow-md'
+                : 'bg-white/[0.04] border border-white/10'
+            }`}
+          >
+            <label htmlFor="input-notes-annotation" className="block text-xs font-bold flex items-center justify-between">
+              <span className={!selectedProduct ? 'text-amber-300 flex items-center gap-1.5' : 'text-zinc-200 flex items-center gap-1.5'}>
+                <Tag className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+                <span>
+                  {!selectedProduct
+                    ? 'Anotaciones / Nombre Temporal del Artículo:'
+                    : 'Anotaciones / Nombre de Lote:'}
+                </span>
+              </span>
+              {!selectedProduct ? (
+                <span className="text-[10px] text-rose-400 font-extrabold bg-rose-500/20 px-2 py-0.5 rounded-full border border-rose-500/30 animate-pulse">
                   * Obligatorio
                 </span>
-              </label>
-              <input
-                id="input-temp-product-annotation"
-                ref={tempInputRef}
-                type="text"
-                value={tempAnnotation}
-                onChange={(e) => {
-                  setTempAnnotation(e.target.value);
-                  if (annotationError && e.target.value.trim()) {
-                    setAnnotationError(null);
-                  }
-                }}
-                placeholder="Ej: Gatorade Manzana 500ml, Yogurt Frutilla 1L..."
-                className={`w-full px-3 py-2 rounded-xl bg-[#0e111a] border text-xs text-white placeholder-zinc-500 focus:outline-hidden transition-all ${
-                  annotationError
-                    ? 'border-rose-500 ring-1 ring-rose-500'
-                    : 'border-amber-500/40 focus:border-amber-400 focus:ring-1 focus:ring-amber-400/50'
-                }`}
-              />
-              {annotationError ? (
-                <p className="text-[10px] text-rose-400 font-bold flex items-center gap-1">
-                  <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
-                  <span>{annotationError}</span>
-                </p>
               ) : (
-                <p className="text-[10px] text-zinc-400">
-                  Escribe una descripción libre para saber con certeza qué producto físico retirar del estante en la alarma.
-                </p>
+                <span className="text-[10px] text-zinc-400 font-semibold bg-white/10 px-2 py-0.5 rounded-full border border-white/10">
+                  Opcional
+                </span>
               )}
-            </div>
-          )}
+            </label>
+            <input
+              id="input-notes-annotation"
+              ref={notesInputRef}
+              type="text"
+              value={notesOrAnnotation}
+              onChange={(e) => {
+                setNotesOrAnnotation(e.target.value);
+                if (annotationError && e.target.value.trim()) {
+                  setAnnotationError(null);
+                }
+              }}
+              placeholder={
+                !selectedProduct
+                  ? 'Ej: Gatorade Manzana 500ml, Lote especial góndola...'
+                  : 'Opcional: Ej. Caja dañada, Lote de oferta, Frente góndola...'
+              }
+              className={`w-full px-3 py-2.5 rounded-xl bg-[#0e111a] border text-xs text-white placeholder-zinc-500 focus:outline-hidden transition-all ${
+                annotationError
+                  ? 'border-rose-500 ring-2 ring-rose-500/50'
+                  : !selectedProduct
+                  ? 'border-amber-500/50 focus:border-amber-400 focus:ring-1 focus:ring-amber-400/50'
+                  : 'border-white/10 focus:border-teal-400 focus:ring-1 focus:ring-teal-400/50'
+              }`}
+            />
+            {annotationError ? (
+              <p className="text-[10px] text-rose-400 font-bold flex items-center gap-1 mt-1">
+                <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+                <span>{annotationError}</span>
+              </p>
+            ) : (
+              <p className="text-[10px] text-zinc-400">
+                {!selectedProduct
+                  ? 'Obligatorio: Escribe una descripción libre para saber con certeza qué producto físico retirar del estante en la alarma.'
+                  : 'Opcional: Puedes registrar detalles de góndola de forma libre o dejarlo vacío sin trabar el guardado de la alerta.'}
+              </p>
+            )}
+          </div>
 
-          {/* Quick Date Selector (Día / Mes / Año) */}
+          {/* Quick Date Selector (Día / Mes / Año) con Selector Tipo Rodillo Nativo */}
           <div className="bg-[#0e111a] border border-white/10 rounded-xl p-3 space-y-3">
             <div className="flex items-center justify-between border-b border-white/5 pb-2">
               <span className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
@@ -706,102 +760,113 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
               </span>
             </div>
 
-            {/* Steppers for Día, Mes, Año */}
+            {/* Cuadros Numéricos Táctiles (Sin botones +/-; abren rodillo infinito al presionar) */}
             <div className="grid grid-cols-3 gap-2">
-              {/* Día */}
-              <div className="bg-white/[0.03] border border-white/5 rounded-xl p-2 text-center">
-                <span className="text-[10px] text-zinc-400 font-semibold block uppercase mb-1">Día</span>
-                <div className="flex items-center justify-between">
-                  <button
-                    type="button"
-                    onClick={() => setSelectedDay((d) => Math.max(1, d - 1))}
-                    className="w-7 h-7 rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold text-sm flex items-center justify-center active:scale-95"
-                  >
-                    -
-                  </button>
-                  <span className="text-base font-bold text-white font-mono">{String(selectedDay).padStart(2, '0')}</span>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedDay((d) => Math.min(31, d + 1))}
-                    className="w-7 h-7 rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold text-sm flex items-center justify-center active:scale-95"
-                  >
-                    +
-                  </button>
+              {/* Día - Tocar para abrir rodillo cíclico infinito 1-31 */}
+              <button
+                type="button"
+                id="btn-open-roller-day"
+                onClick={() => {
+                  setRollerInitialTab('day');
+                  setIsRollerModalOpen(true);
+                }}
+                className="bg-white/[0.03] hover:bg-white/[0.08] active:scale-95 border border-white/10 hover:border-teal-400/50 rounded-xl p-2.5 text-center transition-all flex flex-col items-center justify-between group shadow-sm"
+              >
+                <div className="flex items-center justify-between w-full">
+                  <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider group-hover:text-teal-300">
+                    Día
+                  </span>
+                  <span className="text-[9px] text-teal-400 bg-teal-500/10 px-1.5 py-0.2 rounded border border-teal-500/20 font-mono">
+                    1-31
+                  </span>
                 </div>
-              </div>
+                <span className="text-2xl font-black text-white font-mono my-1 tracking-tight">
+                  {String(selectedDay).padStart(2, '0')}
+                </span>
+                <span className="text-[9px] text-teal-300/80 font-medium flex items-center gap-0.5">
+                  <RotateCw className="w-2.5 h-2.5" />
+                  Rodillo 360°
+                </span>
+              </button>
 
-              {/* Mes */}
-              <div className="bg-white/[0.03] border border-white/5 rounded-xl p-2 text-center">
-                <span className="text-[10px] text-zinc-400 font-semibold block uppercase mb-1">Mes</span>
-                <div className="flex items-center justify-between">
-                  <button
-                    type="button"
-                    onClick={() => setSelectedMonth((m) => Math.max(1, m - 1))}
-                    className="w-7 h-7 rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold text-sm flex items-center justify-center active:scale-95"
-                  >
-                    -
-                  </button>
-                  <span className="text-base font-bold text-amber-300 font-mono">{String(selectedMonth).padStart(2, '0')}</span>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedMonth((m) => Math.min(12, m + 1))}
-                    className="w-7 h-7 rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold text-sm flex items-center justify-center active:scale-95"
-                  >
-                    +
-                  </button>
+              {/* Mes - Tocar para abrir rodillo cíclico infinito 1-12 */}
+              <button
+                type="button"
+                id="btn-open-roller-month"
+                onClick={() => {
+                  setRollerInitialTab('month');
+                  setIsRollerModalOpen(true);
+                }}
+                className="bg-white/[0.03] hover:bg-white/[0.08] active:scale-95 border border-white/10 hover:border-amber-400/50 rounded-xl p-2.5 text-center transition-all flex flex-col items-center justify-between group shadow-sm"
+              >
+                <div className="flex items-center justify-between w-full">
+                  <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider group-hover:text-amber-300">
+                    Mes
+                  </span>
+                  <span className="text-[9px] text-amber-400 bg-amber-500/10 px-1.5 py-0.2 rounded border border-amber-500/20 font-mono">
+                    1-12
+                  </span>
                 </div>
-              </div>
+                <div className="my-1 text-center">
+                  <span className="text-2xl font-black text-amber-300 font-mono block leading-none">
+                    {String(selectedMonth).padStart(2, '0')}
+                  </span>
+                  <span className="text-[10px] font-bold text-zinc-300 block truncate mt-0.5">
+                    {SPANISH_MONTH_NAMES[selectedMonth - 1]}
+                  </span>
+                </div>
+                <span className="text-[9px] text-amber-300/80 font-medium flex items-center gap-0.5">
+                  <RotateCw className="w-2.5 h-2.5" />
+                  Rodillo 360°
+                </span>
+              </button>
 
-              {/* Año */}
-              <div className="bg-white/[0.03] border border-white/5 rounded-xl p-2 text-center">
-                <span className="text-[10px] text-zinc-400 font-semibold block uppercase mb-1">Año</span>
-                <div className="flex items-center justify-between">
-                  <button
-                    type="button"
-                    onClick={() => setSelectedYear((y) => Math.max(2025, y - 1))}
-                    className="w-7 h-7 rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold text-sm flex items-center justify-center active:scale-95"
-                  >
-                    -
-                  </button>
-                  <span className="text-sm font-bold text-white font-mono">{selectedYear}</span>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedYear((y) => Math.min(2035, y + 1))}
-                    className="w-7 h-7 rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold text-sm flex items-center justify-center active:scale-95"
-                  >
-                    +
-                  </button>
+              {/* Año - Congelado automáticamente en el año en curso (2026) para ahorrar clics */}
+              <div
+                className="bg-white/[0.02] border border-white/5 rounded-xl p-2.5 text-center flex flex-col items-center justify-between opacity-85 select-none"
+                title="Año en curso congelado automáticamente para ahorrar clics"
+              >
+                <div className="flex items-center justify-between w-full">
+                  <span className="text-[10px] text-zinc-500 font-bold uppercase tracking-wider flex items-center gap-1">
+                    <Lock className="w-2.5 h-2.5 text-zinc-500" />
+                    Año
+                  </span>
+                  <span className="text-[9px] text-zinc-500 bg-white/5 px-1.5 py-0.2 rounded border border-white/5">
+                    Fijo
+                  </span>
                 </div>
+                <span className="text-xl font-black text-zinc-300 font-mono my-1 tracking-tight">
+                  {selectedYear}
+                </span>
+                <span className="text-[9px] text-emerald-400 font-semibold flex items-center gap-0.5">
+                  🔒 Año 2026
+                </span>
               </div>
             </div>
 
             {/* Quick preset buttons: 3 atajos dinámicos de fecha basados en el reloj del dispositivo */}
             {(() => {
-              const SPANISH_MONTHS = [
-                'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
-                'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'
-              ];
               const now = new Date();
-              const curYear = now.getFullYear();
+              const curYear = 2026;
               const curMonthIdx = now.getMonth();
 
               // Botón 1: "Este Mes" -> último día del mes actual (Ej: 31 de Octubre)
               const curMonthLastDay = new Date(curYear, curMonthIdx + 1, 0).getDate();
-              const curMonthName = SPANISH_MONTHS[curMonthIdx];
+              const curMonthName = SPANISH_MONTH_NAMES[curMonthIdx];
 
               // Botón 2: "Mes Próximo" -> último día del mes entrante (Ej: 30 de Noviembre)
               const nextMonthDate = new Date(curYear, curMonthIdx + 1, 1);
               const nextYear = nextMonthDate.getFullYear();
               const nextMonthIdx = nextMonthDate.getMonth();
               const nextMonthLastDay = new Date(nextYear, nextMonthIdx + 1, 0).getDate();
-              const nextMonthName = SPANISH_MONTHS[nextMonthIdx];
+              const nextMonthName = SPANISH_MONTH_NAMES[nextMonthIdx];
 
               // Botón 3: "1ra Sem. Siguiente" -> día 7 del mes subsiguiente (Ej: 7 de Diciembre) como margen de seguridad
               const followMonthDate = new Date(curYear, curMonthIdx + 2, 1);
               const followYear = followMonthDate.getFullYear();
               const followMonthIdx = followMonthDate.getMonth();
               const followDay = 7;
-              const followMonthName = SPANISH_MONTHS[followMonthIdx];
+              const followMonthName = SPANISH_MONTH_NAMES[followMonthIdx];
 
               const isBtn1Active = selectedYear === curYear && selectedMonth === (curMonthIdx + 1) && selectedDay === curMonthLastDay;
               const isBtn2Active = selectedYear === nextYear && selectedMonth === (nextMonthIdx + 1) && selectedDay === nextMonthLastDay;
@@ -885,17 +950,6 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
                 </div>
               );
             })()}
-
-            {/* Optional note input */}
-            <div>
-              <input
-                type="text"
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                placeholder="Nota opcional (Ej: Lote 4B, frente góndola)"
-                className="w-full px-2.5 py-1.5 rounded-lg bg-white/[0.04] border border-white/10 text-xs text-white placeholder-zinc-500 focus:outline-hidden"
-              />
-            </div>
           </div>
 
           <div className="text-[11px] text-zinc-400 flex items-center gap-1.5 bg-amber-500/10 border border-amber-500/20 p-2 rounded-xl">
@@ -1110,6 +1164,18 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
           </div>
         )}
       </div>
+
+      {/* Floating Cyclic Wheel / Roller Modal (Bucle Infinito 360° / Selección 1 Toque) */}
+      <CyclicWheelPickerModal
+        isOpen={isRollerModalOpen}
+        initialTab={rollerInitialTab}
+        selectedDay={selectedDay}
+        selectedMonth={selectedMonth}
+        selectedYear={selectedYear}
+        onSelectDay={(day) => setSelectedDay(day)}
+        onSelectMonth={(month) => setSelectedMonth(month)}
+        onClose={() => setIsRollerModalOpen(false)}
+      />
     </div>
   );
 };
