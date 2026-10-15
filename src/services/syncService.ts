@@ -159,6 +159,7 @@ export const SyncService = {
           return [];
         }
       })(),
+      users: AuthService.getUsers(), // Tabla completa de Usuarios, Roles, PINs y Permisos
       settings: StorageService.getSettings(),
     };
   },
@@ -655,6 +656,10 @@ export const SyncService = {
     mergedProductsCount?: number;
     mergedMovementsCount?: number;
     recalculatedCount?: number;
+    usersAddedCount?: number;
+    usersUpdatedCount?: number;
+    usersAddedNames?: string[];
+    usersUpdatedNames?: string[];
   } {
     try {
       const trimmed = (fileContent || '').trim();
@@ -718,7 +723,18 @@ export const SyncService = {
         ? `Copia Completa (${photosCount} fotos/iconos importados)`
         : `Copia Ligera (sin fotos, fotos locales existentes preservadas)`;
 
-      const transparentMsg = `¡${hasPhotos ? 'Copia Completa (Con Fotos)' : 'Copia Ligera (Sin Fotos)'} reconocida y procesada con éxito! Se unificaron ${importResult.mergedProductsCount} productos, pasillos y ${importResult.mergedMovementsCount} movimientos. Se recalcularon existencias en ${importResult.recalculatedCount} artículo(s). (${typeDesc})`;
+      let usersDetail = '';
+      if ((importResult.usersAddedCount || 0) > 0 || (importResult.usersUpdatedCount || 0) > 0) {
+        const addedPart = (importResult.usersAddedCount || 0) > 0
+          ? `${importResult.usersAddedCount} nuevo(s) operario(s) (${importResult.usersAddedNames?.join(', ') || 'alta automática'})`
+          : '';
+        const updatedPart = (importResult.usersUpdatedCount || 0) > 0
+          ? `${importResult.usersUpdatedCount} credenciales/PINs y permisos actualizados`
+          : '';
+        usersDetail = ` Se procesaron usuarios: ${[addedPart, updatedPart].filter(Boolean).join(' y ')}. Llave Maestra del Administrador habilitada de inmediato.`;
+      }
+
+      const transparentMsg = `¡${hasPhotos ? 'Copia Completa (Con Fotos)' : 'Copia Ligera (Sin Fotos)'} reconocida y procesada con éxito! Se unificaron ${importResult.mergedProductsCount} productos, pasillos y ${importResult.mergedMovementsCount} movimientos. Se recalcularon existencias en ${importResult.recalculatedCount} artículo(s).${usersDetail} (${typeDesc})`;
 
       return {
         success: true,
@@ -731,6 +747,10 @@ export const SyncService = {
         mergedProductsCount: importResult.mergedProductsCount,
         mergedMovementsCount: importResult.mergedMovementsCount,
         recalculatedCount: importResult.recalculatedCount,
+        usersAddedCount: importResult.usersAddedCount || 0,
+        usersUpdatedCount: importResult.usersUpdatedCount || 0,
+        usersAddedNames: importResult.usersAddedNames || [],
+        usersUpdatedNames: importResult.usersUpdatedNames || [],
       };
     } catch (e: any) {
       const errStr = e?.message || '';

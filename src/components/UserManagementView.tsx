@@ -79,6 +79,10 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
 
   useEffect(() => {
     loadData();
+    window.addEventListener('users_updated', loadData);
+    return () => {
+      window.removeEventListener('users_updated', loadData);
+    };
   }, []);
 
   const showToast = (msg: string) => {

@@ -35,18 +35,27 @@ export const WelcomeLoginScreen: React.FC<WelcomeLoginScreenProps> = ({
   const [deviceLockSupported, setDeviceLockSupported] = useState(false);
 
   useEffect(() => {
-    const loadedUsers = AuthService.getUsers().filter((u) => u.isActive);
-    setUsers(loadedUsers);
+    const handleLoadUsers = () => {
+      const loadedUsers = AuthService.getUsers().filter((u) => u.isActive);
+      setUsers(loadedUsers);
 
-    // Default select current user or first admin
-    const current = AuthService.getCurrentUser();
-    const defaultUser = loadedUsers.find((u) => u.id === current?.id) || loadedUsers[0] || null;
-    setSelectedUser(defaultUser);
+      // Default select current user or first admin
+      const current = AuthService.getCurrentUser();
+      const defaultUser = loadedUsers.find((u) => u.id === current?.id) || loadedUsers[0] || null;
+      setSelectedUser(defaultUser);
+    };
+
+    handleLoadUsers();
+    window.addEventListener('users_updated', handleLoadUsers);
 
     // Check if biometric/credentials supported
     if (typeof window !== 'undefined' && window.PublicKeyCredential) {
       setDeviceLockSupported(true);
     }
+
+    return () => {
+      window.removeEventListener('users_updated', handleLoadUsers);
+    };
   }, []);
 
   const handleSelectUser = (user: AppUser) => {

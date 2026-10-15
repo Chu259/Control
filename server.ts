@@ -20,6 +20,7 @@ interface StoreSyncData {
   replenishmentList: any[];
   newProductsAlerts: string[]; // IDs of products added by secondary/user devices
   categories: any[];
+  users?: any[];
   settings: any;
   connectedDevices: {
     deviceId: string;
@@ -395,6 +396,23 @@ async function startServer() {
       }
       store.categories = Array.from(catMap.values());
     }
+
+    // 8. Users & Permissions
+    if (Array.isArray(body.users) && body.users.length > 0) {
+      if (!store.users) {
+        store.users = [];
+      }
+      const userMap = new Map<string, any>(store.users.map((u: any) => [u.id || u.username, u]));
+      for (const u of body.users) {
+        if (!u) continue;
+        const key = u.id || u.username;
+        if (key) {
+          userMap.set(key, u);
+        }
+      }
+      store.users = Array.from(userMap.values());
+    }
+
     if (body.settings && typeof body.settings === 'object') {
       store.settings = { ...store.settings, ...body.settings };
     }
@@ -417,6 +435,7 @@ async function startServer() {
       shoppingList: store.shoppingList || [],
       replenishmentList: store.replenishmentList || [],
       categories: store.categories || [],
+      users: store.users || [],
       newProductsAlerts: store.newProductsAlerts || [],
       connectedDevices: store.connectedDevices,
       appliedMovementsCount: newMovementsApplied,

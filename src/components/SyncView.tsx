@@ -1359,14 +1359,14 @@ export const SyncView: React.FC<SyncViewProps> = ({
                 </span>
               </div>
               <p className="text-[11px] text-zinc-300 leading-snug">
-                Genera el archivo <span className="text-teal-300 font-mono font-medium">.json</span> con los {products.length} productos, stock, movimientos y pasillos de colores, omitiendo las cadenas pesadas de fotos Base64.
+                Genera el archivo <span className="text-teal-300 font-mono font-medium">.json</span> con los {products.length} productos, stock, movimientos, pasillos de colores y la tabla completa de <span className="text-white font-medium">Usuarios, Roles, PINs y Permisos</span> (omitiendo fotos Base64).
               </p>
               <div className="mt-2.5 pt-2 border-t border-white/5 flex items-center justify-between text-[10px] text-teal-400 font-medium">
                 <span className="flex items-center gap-1">
                   <Share2 className="w-3 h-3" />
                   {exportingMode === 'light' ? 'Guardando archivo en Android...' : 'Compartir por WhatsApp (Documento)'}
                 </span>
-                <span className="text-zinc-400 font-mono">~25-45 KB</span>
+                <span className="text-zinc-400 font-mono">Catálogo + Usuarios</span>
               </div>
             </button>
 
@@ -1377,7 +1377,7 @@ export const SyncView: React.FC<SyncViewProps> = ({
               onClick={handleExportFullJson}
               disabled={isExportingFile}
               className="group relative flex flex-col p-3.5 rounded-xl bg-gradient-to-br from-indigo-500/15 via-purple-500/10 to-transparent hover:from-indigo-500/25 hover:via-purple-500/20 hover:to-indigo-500/10 border border-indigo-500/35 hover:border-indigo-400/50 text-left transition-all active:scale-[0.98] disabled:opacity-50 shadow-md cursor-pointer"
-              title="Generar archivo .json empaquetando absolutamente toda la base de datos, incluyendo los códigos Base64 de las imágenes de los productos. Ideal para el clonado inicial en el teléfono de un empleado nuevo."
+              title="Generar archivo .json empaquetando absolutamente toda la base de datos, incluyendo fotos Base64 y tabla completa de usuarios, roles, PINs y permisos. Ideal para el clonado inicial en el teléfono de un empleado nuevo."
             >
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2">
@@ -1397,14 +1397,14 @@ export const SyncView: React.FC<SyncViewProps> = ({
                 </span>
               </div>
               <p className="text-[11px] text-zinc-300 leading-snug">
-                Empaqueta el 100% de la base de datos con los {products.length} productos, códigos Base64 de imágenes, stock, pasillos y movimientos.
+                Empaqueta el 100% de la base de datos: {products.length} productos con fotos Base64, stock, movimientos, pasillos y la tabla completa de <span className="text-white font-medium">Usuarios, Roles, PINs y Permisos</span>.
               </p>
               <div className="mt-2.5 pt-2 border-t border-white/5 flex items-center justify-between text-[10px] text-indigo-400 font-medium">
                 <span className="flex items-center gap-1">
                   <Share2 className="w-3 h-3" />
                   {exportingMode === 'full' ? 'Guardando archivo en Android...' : 'Compartir por WhatsApp (Documento)'}
                 </span>
-                <span className="text-zinc-400 font-mono">Base completa</span>
+                <span className="text-zinc-400 font-mono">Base 100% Completa</span>
               </div>
             </button>
           </div>
@@ -1418,7 +1418,7 @@ export const SyncView: React.FC<SyncViewProps> = ({
               <span>Importación del Empleado (Cargar Archivo .json Recibido):</span>
             </span>
             <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-mono">
-              Auto-detecta fotos / copia ligera
+              Auto-detecta fotos y usuarios
             </span>
           </div>
 
@@ -1446,7 +1446,7 @@ export const SyncView: React.FC<SyncViewProps> = ({
                   </span>
                 </div>
                 <p className="text-[11px] text-zinc-300 mt-0.5">
-                  Selecciona el archivo recibido por WhatsApp. El importador reconoce automáticamente si trae fotos o no, fusionando nombres (prioridad admin) y recalculando existencias de forma transparente.
+                  Selecciona el archivo recibido por WhatsApp. Da de alta nuevos operarios (ej. Tiki), actualiza contraseñas reales y permisos, habilita la "Llave Maestra" para el Administrador, restringe menús al empleado y fusiona existencias de forma transparente.
                 </p>
               </div>
             </div>

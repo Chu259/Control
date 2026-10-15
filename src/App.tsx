@@ -134,16 +134,33 @@ export default function App() {
     const loadedMovements = StorageService.getMovements();
     const loadedCategories = StorageService.getCategories();
     const loadedSettings = StorageService.getSettings();
+    const loadedCurrentUser = AuthService.getCurrentUser();
 
     setProducts(loadedProducts);
     setMovements(loadedMovements);
     setCategories(loadedCategories);
     setSettings(loadedSettings);
+    if (loadedCurrentUser) {
+      setCurrentUser(loadedCurrentUser);
+    }
     setShoppingCount(ShoppingService.getShoppingList().length);
     if (loadedSettings.defaultViewMode) {
       setViewMode(loadedSettings.defaultViewMode);
     }
   };
+
+  useEffect(() => {
+    const handleUsersUpdated = (e: any) => {
+      const targetUser = e?.detail?.switchedToUser || AuthService.getCurrentUser();
+      if (targetUser) {
+        setCurrentUser(targetUser);
+      }
+    };
+    window.addEventListener('users_updated', handleUsersUpdated);
+    return () => {
+      window.removeEventListener('users_updated', handleUsersUpdated);
+    };
+  }, []);
 
   const [shoppingCount, setShoppingCount] = useState<number>(() => ShoppingService.getShoppingList().length);
 

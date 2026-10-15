@@ -3,6 +3,7 @@ import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
 import { FilePicker } from '@capawesome/capacitor-file-picker';
 import { SyncService } from './syncService';
+import { AuthService } from './authService';
 import { Sound } from './sound';
 import { SyncPayload } from '../types';
 
@@ -74,6 +75,11 @@ export const NativeFileService = {
         ? { ...customPayload }
         : SyncService.createSyncPayload({ stripImages });
 
+      // OBLIGATORIO: Garantizar que la tabla completa de Usuarios, Roles, PINs y Permisos esté presente
+      if (!payload.users || payload.users.length === 0) {
+        payload.users = AuthService.getUsers();
+      }
+
       if (stripImages) {
         if (payload.products) {
           payload.products = payload.products.map((p) => {
@@ -93,6 +99,7 @@ export const NativeFileService = {
 
       const productCount = payload.products?.length || 0;
       const movementCount = payload.movements?.length || 0;
+      const userCount = payload.users?.length || 0;
       const storeCode = (payload.storeCode || 'DEPOS').trim().toUpperCase();
       const dateStr = new Date().toISOString().slice(0, 10);
       const isLight = mode === 'light' || stripImages;
@@ -111,8 +118,8 @@ export const NativeFileService = {
         : `Copia Completa de Inventario (${storeCode}) - Con Fotos e Iconos`;
 
       const shareText = isLight
-        ? `Base de datos rápida de ${storeCode} (${dateStr}): ${productCount} productos, stock, pasillos y ${movementCount} movimientos (Copia Ligera sin fotos, tamaño ${formattedSize}). Enviar como documento adjunto por WhatsApp.`
-        : `Base de datos completa de ${storeCode} (${dateStr}): ${productCount} productos con fotos Base64, stock, pasillos y ${movementCount} movimientos (Copia Completa para clonado inicial, tamaño ${formattedSize}). Enviar como documento adjunto por WhatsApp.`;
+        ? `Base de datos rápida de ${storeCode} (${dateStr}): ${productCount} productos, ${userCount} usuarios y permisos con PINs, stock, pasillos y ${movementCount} movimientos (Copia Ligera sin fotos, tamaño ${formattedSize}). Enviar como documento adjunto por WhatsApp.`
+        : `Base de datos completa de ${storeCode} (${dateStr}): ${productCount} productos con fotos Base64, ${userCount} usuarios y permisos con PINs, stock, pasillos y ${movementCount} movimientos (Copia Completa para clonado inicial, tamaño ${formattedSize}). Enviar como documento adjunto por WhatsApp.`;
 
       // 2. Si estamos en Android nativo (Capacitor)
       if (Capacitor.isNativePlatform()) {

@@ -32,7 +32,7 @@ export const UserLoginModal: React.FC<UserLoginModalProps> = ({
   onUserAuthenticated,
   isMandatoryLock = false,
 }) => {
-  const users = AuthService.getUsers().filter((u) => u.isActive);
+  const [users, setUsers] = useState<AppUser[]>(() => AuthService.getUsers().filter((u) => u.isActive));
   const [selectedUser, setSelectedUser] = useState<AppUser | null>(
     currentUser || users[0] || null
   );
@@ -41,6 +41,22 @@ export const UserLoginModal: React.FC<UserLoginModalProps> = ({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isVerifyingDevice, setIsVerifyingDevice] = useState(false);
   const [authSuccessNotice, setAuthSuccessNotice] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    const handleUpdate = () => {
+      const fresh = AuthService.getUsers().filter((u) => u.isActive);
+      setUsers(fresh);
+      if (!selectedUser || !fresh.some((u) => u.id === selectedUser.id)) {
+        const foundCurrent = fresh.find((u) => u.id === currentUser?.id);
+        setSelectedUser(foundCurrent || fresh[0] || null);
+      }
+    };
+    if (isOpen) {
+      handleUpdate();
+    }
+    window.addEventListener('users_updated', handleUpdate);
+    return () => window.removeEventListener('users_updated', handleUpdate);
+  }, [isOpen, currentUser]);
 
   if (!isOpen) return null;
 

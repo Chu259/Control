@@ -867,6 +867,7 @@ export const StorageService = {
       products: this.getProducts(),
       movements: this.getMovements(),
       categories: this.getCategories(),
+      users: AuthService.getUsers(), // Tabla de usuarios, roles, PINs y permisos
       settings: this.getSettings(),
       expirations: (() => {
         try {
@@ -1136,6 +1137,10 @@ export const StorageService = {
     mergedProductsCount: number;
     mergedMovementsCount: number;
     recalculatedCount: number;
+    usersAddedCount?: number;
+    usersUpdatedCount?: number;
+    usersAddedNames?: string[];
+    usersUpdatedNames?: string[];
   } {
     try {
       const trimmed = (jsonString || '').trim();
@@ -1400,18 +1405,55 @@ export const StorageService = {
         } catch {}
       }
 
+      // Fusión y sincronización obligatoria de Usuarios, Roles, PINs y Permisos
+      let usersMergedInfo: {
+        added: number;
+        updated: number;
+        total: number;
+        addedUserNames: string[];
+        updatedUserNames: string[];
+        switchedToUser?: any;
+      } | null = null;
+
+      if (Array.isArray(bundle.users) && bundle.users.length > 0) {
+        try {
+          const isClientDevice = this.getSettings().syncConfig?.role === 'client' || !localIsAdmin;
+          usersMergedInfo = AuthService.mergeIncomingUsers(bundle.users, {
+            isClientDevice,
+            incomingIsAdmin,
+          });
+        } catch (uErr) {
+          console.warn('Error merging users during importBackup:', uErr);
+        }
+      }
+
       // Respaldo silencioso en la nube
       CloudBackupService.triggerAutoBackup();
 
       // Reiniciar reloj antirrobo de 48 horas al sincronizar datos
       AntiTheftService.recordSuccessfulSync();
 
+      let usersNote = '';
+      if (usersMergedInfo && (usersMergedInfo.added > 0 || usersMergedInfo.updated > 0)) {
+        const addedPart = usersMergedInfo.added > 0
+          ? `${usersMergedInfo.added} nuevo(s) operario(s) (${usersMergedInfo.addedUserNames.join(', ')})`
+          : '';
+        const updatedPart = usersMergedInfo.updated > 0
+          ? `${usersMergedInfo.updated} contraseñas/permisos actualizados`
+          : '';
+        usersNote = ` Usuarios sincronizados: ${[addedPart, updatedPart].filter(Boolean).join(' y ')}.`;
+      }
+
       return {
         success: true,
-        message: `¡Fusión inteligente completada! Se unificaron ${finalProducts.length} productos y ${mergedMovements.length} movimientos. Se recalcularon las existencias de ${updatedCount} artículo(s) de acuerdo al historial unificado.`,
+        message: `¡Fusión inteligente completada! Se unificaron ${finalProducts.length} productos y ${mergedMovements.length} movimientos. Se recalcularon las existencias de ${updatedCount} artículo(s) de acuerdo al historial unificado.${usersNote}`,
         mergedProductsCount: finalProducts.length,
         mergedMovementsCount: mergedMovements.length,
         recalculatedCount: updatedCount,
+        usersAddedCount: usersMergedInfo?.added || 0,
+        usersUpdatedCount: usersMergedInfo?.updated || 0,
+        usersAddedNames: usersMergedInfo?.addedUserNames || [],
+        usersUpdatedNames: usersMergedInfo?.updatedUserNames || [],
       };
     } catch (e: any) {
       console.error('Error in importBackup:', e);

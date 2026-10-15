@@ -84,6 +84,7 @@ export interface AppUser {
   createdAt: string;
   lastLogin?: string;
   isActive: boolean;
+  permissions?: string[];
 }
 
 export interface AccessLog {
@@ -171,6 +172,7 @@ export interface SyncPayload {
   replenishmentList?: ReplenishmentItem[];
   categories: Category[];
   expirations?: ExpirationItem[];
+  users?: AppUser[]; // Tabla completa de Usuarios, Roles, PINs de acceso y Permisos
   settings: StoreSettings;
   reviewedProductIds?: string[];
   newProductsAlerts?: string[];

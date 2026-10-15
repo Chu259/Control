@@ -422,4 +422,160 @@ export const AuthService = {
 
     return { success: true };
   },
+
+  /**
+   * Procesa e integra la sección de usuarios proveniente del archivo .json exportado por el Administrador.
+   * Da de alta automáticamente a nuevos operarios (ej. Tiki), actualiza contraseñas reales y roles,
+   * permitiendo el uso inmediato de la Llave Maestra por el Administrador y aplicando las restricciones de menú al empleado.
+   */
+  mergeIncomingUsers(
+    incomingUsers: AppUser[],
+    options?: { isClientDevice?: boolean; incomingIsAdmin?: boolean }
+  ): {
+    added: number;
+    updated: number;
+    total: number;
+    addedUserNames: string[];
+    updatedUserNames: string[];
+    switchedToUser?: AppUser;
+  } {
+    if (!Array.isArray(incomingUsers) || incomingUsers.length === 0) {
+      return {
+        added: 0,
+        updated: 0,
+        total: this.getUsers().length,
+        addedUserNames: [],
+        updatedUserNames: [],
+      };
+    }
+
+    const currentUsers = this.getUsers();
+    const cleanStr = (s?: string) => (s || '').trim().toLowerCase();
+
+    let addedCount = 0;
+    let updatedCount = 0;
+    const addedNames: string[] = [];
+    const updatedNames: string[] = [];
+    const newlyAddedOperators: AppUser[] = [];
+
+    const mergedList: AppUser[] = [...currentUsers];
+
+    for (const inc of incomingUsers) {
+      if (!inc || !inc.name) continue;
+
+      const incId = cleanStr(inc.id);
+      const incUsername = cleanStr(inc.username);
+      const incName = cleanStr(inc.name);
+
+      // Buscar si el usuario ya existe localmente (por ID, username o nombre)
+      const existingIdx = mergedList.findIndex(
+        (u) =>
+          (incId && cleanStr(u.id) === incId) ||
+          (incUsername && cleanStr(u.username) === incUsername) ||
+          (incName && cleanStr(u.name) === incName)
+      );
+
+      if (existingIdx !== -1) {
+        // Actualizar datos y contraseñas reales del usuario existente
+        const current = mergedList[existingIdx];
+        const updated: AppUser = {
+          ...current,
+          name: inc.name.trim(),
+          username: (inc.username && inc.username.trim().toLowerCase()) || current.username,
+          pin: (inc.pin !== undefined && inc.pin !== null && inc.pin.toString().trim() !== '')
+            ? inc.pin.toString().trim()
+            : current.pin,
+          role: inc.role || current.role,
+          phoneLockEnabled: inc.phoneLockEnabled !== undefined
+            ? Boolean(inc.phoneLockEnabled)
+            : current.phoneLockEnabled,
+          avatarColor: inc.avatarColor || current.avatarColor,
+          isActive: inc.isActive !== undefined ? Boolean(inc.isActive) : current.isActive,
+          permissions: inc.permissions || current.permissions,
+        };
+        mergedList[existingIdx] = updated;
+        updatedCount++;
+        updatedNames.push(updated.name);
+      } else {
+        // Dar de alta automáticamente al nuevo operario o administrador (ej. Tiki)
+        const newUser: AppUser = {
+          id: inc.id || `user-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          name: inc.name.trim(),
+          username:
+            (inc.username && inc.username.trim().toLowerCase().replace(/\s+/g, '')) ||
+            inc.name.trim().toLowerCase().replace(/\s+/g, ''),
+          pin: (inc.pin !== undefined && inc.pin !== null && inc.pin.toString().trim() !== '')
+            ? inc.pin.toString().trim()
+            : '1234',
+          role: inc.role || 'user',
+          phoneLockEnabled: inc.phoneLockEnabled !== undefined
+            ? Boolean(inc.phoneLockEnabled)
+            : true,
+          avatarColor: inc.avatarColor || (inc.role === 'admin' ? '#0284c7' : '#10b981'),
+          createdAt: inc.createdAt || new Date().toISOString(),
+          lastLogin: inc.lastLogin,
+          isActive: inc.isActive !== undefined ? Boolean(inc.isActive) : true,
+          permissions: inc.permissions || [],
+        };
+        mergedList.push(newUser);
+        addedCount++;
+        addedNames.push(newUser.name);
+
+        if (newUser.role === 'user') {
+          newlyAddedOperators.push(newUser);
+        }
+      }
+    }
+
+    this.saveUsers(mergedList);
+
+    // Actualizar usuario activo en la sesión local
+    const currentLoggedIn = this.getCurrentUser();
+    let switchedToUser: AppUser | undefined;
+
+    // Si el usuario actual fue modificado con nuevas credenciales/roles, refrescarlo
+    const refreshedCurrent = mergedList.find((u) => u.id === currentLoggedIn.id);
+    if (refreshedCurrent) {
+      this.setCurrentUser(refreshedCurrent);
+      switchedToUser = refreshedCurrent;
+    }
+
+    // Si estamos en el celular del empleado (o si el usuario actual era el default genérico inicial
+    // y se dio de alta un nuevo operario como Tiki):
+    // Asignar el perfil del nuevo operario para que le aplique su rol 'user' y los menús restringidos
+    // desaparezcan de inmediato.
+    const isDefaultAdmin = currentLoggedIn.id === 'user-admin-1' && currentLoggedIn.pin === '1234';
+    if ((options?.isClientDevice || isDefaultAdmin) && newlyAddedOperators.length > 0) {
+      const targetOperator = newlyAddedOperators[0];
+      this.setCurrentUser(targetOperator);
+      switchedToUser = targetOperator;
+    }
+
+    // Disparar evento para que todos los componentes (App, Header, NavigationMenu, Login)
+    // actualicen inmediatamente la sesión y el perfil visible
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('users_updated', {
+          detail: {
+            added: addedCount,
+            updated: updatedCount,
+            total: mergedList.length,
+            addedNames,
+            updatedNames,
+            switchedToUser,
+            users: mergedList,
+          },
+        })
+      );
+    }
+
+    return {
+      added: addedCount,
+      updated: updatedCount,
+      total: mergedList.length,
+      addedUserNames: addedNames,
+      updatedUserNames: updatedNames,
+      switchedToUser,
+    };
+  },
 };
