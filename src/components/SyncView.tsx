@@ -36,6 +36,7 @@ import { StorageService } from '../services/storage';
 import { Sound } from '../services/sound';
 import { NotificationService } from '../services/pushNotifications';
 import { NetworkPermissionService } from '../services/networkPermissions';
+import { NativeFileService } from '../services/nativeFileService';
 
 interface SyncViewProps {
   products: Product[];
@@ -77,6 +78,8 @@ export const SyncView: React.FC<SyncViewProps> = ({
   const [copiedJson, setCopiedJson] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [forceStripImages, setForceStripImages] = useState(false);
+  const [isExportingFile, setIsExportingFile] = useState(false);
+  const [isPickingFile, setIsPickingFile] = useState(false);
   const [exportOptState, setExportOptState] = useState<{
     isGenerating: boolean;
     isSafeForClipboard: boolean;
@@ -453,7 +456,80 @@ export const SyncView: React.FC<SyncViewProps> = ({
     }
   };
 
-  // Direct file import to bypass any clipboard limitation
+  // Requirement 1: Generar y Exportar Archivo .json Real vía @capacitor/filesystem y disparar menú nativo de compartir de Android (WhatsApp)
+  const handleExportAndShareJson = async () => {
+    setIsExportingFile(true);
+    try {
+      const res = await NativeFileService.exportAndShareJsonFile();
+      if (res.success) {
+        Sound.playSuccessChime();
+        setMessage({
+          type: 'success',
+          text: res.message,
+        });
+      } else {
+        setMessage({
+          type: 'error',
+          text: res.message,
+        });
+      }
+    } catch (err: any) {
+      console.error('Error exportando archivo .json:', err);
+      setMessage({
+        type: 'error',
+        text: `Error al exportar archivo: ${err?.message || 'Error desconocido'}`,
+      });
+    } finally {
+      setIsExportingFile(false);
+    }
+  };
+
+  // Requirement 2: Activar Selector de Archivos (File Picker) en Importación del empleado
+  const handlePickAndLoadJsonFile = async () => {
+    setIsPickingFile(true);
+    setImportError(null);
+    try {
+      const result = await NativeFileService.pickAndReadJsonFile();
+      if (result.cancelled) {
+        setIsPickingFile(false);
+        return;
+      }
+      if (!result.success || !result.content) {
+        setImportError(result.errorMessage || 'No se pudo leer el archivo seleccionado.');
+        Sound.playWarningTone();
+        setIsPickingFile(false);
+        return;
+      }
+
+      const clean = result.content.trim();
+      setImportJsonText(clean);
+
+      // Ejecutar la fusión inteligente de nombres (prioridad administrador) y el recálculo matemático de existencias
+      const res = SyncService.importSyncFile(clean);
+      if (res.success) {
+        Sound.playSuccessChime();
+        setImportModalOpen(false);
+        setImportJsonText('');
+        setImportError(null);
+        setMessage({
+          type: 'success',
+          text: `¡Archivo "${result.fileName || '.json'}" importado con éxito! ${res.message}`,
+        });
+        onRefreshData();
+      } else {
+        setImportError(res.message);
+        Sound.playWarningTone();
+      }
+    } catch (err: any) {
+      console.error('Error in handlePickAndLoadJsonFile:', err);
+      setImportError(`Error al seleccionar o leer el archivo: ${err?.message || 'Error desconocido'}`);
+      Sound.playWarningTone();
+    } finally {
+      setIsPickingFile(false);
+    }
+  };
+
+  // Direct file import fallback
   const handleImportJsonFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1192,38 +1268,89 @@ export const SyncView: React.FC<SyncViewProps> = ({
         </div>
       </div>
 
-      {/* Requirement 5: Manual Sync by Copying / Pasting JSON text in a Modal (Bypasses Android File Download restrictions) */}
-      <div className="bg-[#161922] border border-white/10 rounded-2xl p-4 shadow-lg">
-        <div className="flex items-center gap-2 mb-2">
-          <Layers className="w-4 h-4 text-emerald-400" />
-          <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-wider">
-            3. Sincronización Manual por Portapapeles (Copiar / Pegar JSON)
-          </h3>
+      {/* Requirement 1 & 2: Sincronización Profesional por Archivos .json Nativos y Portapapeles */}
+      <div className="bg-[#161922] border border-white/10 rounded-2xl p-4 shadow-lg space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-xl bg-teal-500/20 text-teal-300 flex items-center justify-center">
+              <FileCode className="w-4 h-4" />
+            </div>
+            <div>
+              <h3 className="text-xs font-bold text-white uppercase tracking-wider">
+                3. Generación y Carga de Archivo .json Nativo
+              </h3>
+              <p className="text-[11px] text-zinc-400">
+                Almacenamiento físico de Android vía @capacitor/filesystem y compartición por WhatsApp
+              </p>
+            </div>
+          </div>
+          <span className="text-[10px] px-2 py-0.5 rounded-full bg-teal-500/20 text-teal-300 border border-teal-500/40 font-mono font-bold">
+            Archivos Nativos
+          </span>
         </div>
-        <p className="text-xs text-zinc-400 mb-3 leading-relaxed">
-          Para transferir el catálogo completo de productos y movimientos entre dispositivos sin depender del sistema de descargas de Android ni de cables:
+
+        <p className="text-xs text-zinc-300 leading-relaxed">
+          Para transferir la base de datos completa (catálogo de 152 productos, stock, pasillos y movimientos) superando cualquier límite de texto de WhatsApp:
         </p>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {/* Botón 1: Descargar archivo .sync.json completo y disparar menú compartir Android */}
           <button
             id="export-sync-file-btn"
             type="button"
-            onClick={() => handleOpenExportModal(false)}
-            className="flex items-center justify-center gap-2 p-3.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white font-semibold text-xs transition-all active:scale-95"
+            onClick={handleExportAndShareJson}
+            disabled={isExportingFile}
+            className="flex items-center justify-center gap-2 p-3.5 rounded-xl bg-gradient-to-r from-teal-500/20 to-emerald-500/20 hover:from-teal-500/30 hover:to-emerald-500/30 border border-teal-500/40 text-teal-200 font-bold text-xs transition-all active:scale-95 disabled:opacity-50 shadow-md"
+            title="Empaquetar toda la base de datos en un archivo físico .json y abrir el menú de compartir de Android para WhatsApp"
           >
-            <Copy className="w-4 h-4 text-teal-400" />
-            <span>Exportar Copia (Ver y Copiar JSON)</span>
+            {isExportingFile ? (
+              <Loader2 className="w-4 h-4 text-teal-400 animate-spin" />
+            ) : (
+              <Share2 className="w-4 h-4 text-teal-400" />
+            )}
+            <span>{isExportingFile ? 'Empaquetando .json...' : 'Descargar archivo .sync.json completo'}</span>
           </button>
 
+          {/* Botón 2: Cargar Archivo .json invocando selector de archivos nativo */}
           <button
             id="import-sync-modal-btn"
             type="button"
-            onClick={handleOpenImportModal}
-            className="flex items-center justify-center gap-2 p-3.5 rounded-xl bg-white/5 hover:bg-white/10 border border-dashed border-teal-500/40 text-teal-300 font-semibold text-xs transition-all active:scale-95"
+            onClick={handlePickAndLoadJsonFile}
+            disabled={isPickingFile}
+            className="flex items-center justify-center gap-2 p-3.5 rounded-xl bg-gradient-to-r from-emerald-500/20 to-teal-500/20 hover:from-emerald-500/30 hover:to-teal-500/30 border border-emerald-500/40 text-emerald-200 font-bold text-xs transition-all active:scale-95 disabled:opacity-50 shadow-md"
+            title="Invocar el selector de archivos nativo de Android para seleccionar el .json recibido por WhatsApp"
           >
-            <ClipboardPaste className="w-4 h-4 text-teal-400" />
-            <span>Importar Copia (Pegar JSON)</span>
+            {isPickingFile ? (
+              <Loader2 className="w-4 h-4 text-emerald-400 animate-spin" />
+            ) : (
+              <Upload className="w-4 h-4 text-emerald-400" />
+            )}
+            <span>{isPickingFile ? 'Abriendo selector...' : 'Cargar Archivo .json'}</span>
           </button>
+        </div>
+
+        {/* Atajos secundarios de inspección manual */}
+        <div className="flex items-center justify-between pt-1 border-t border-white/5 text-[11px] text-zinc-400">
+          <span>Opciones auxiliares:</span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => handleOpenExportModal(false)}
+              className="text-zinc-400 hover:text-white underline underline-offset-2 flex items-center gap-1"
+            >
+              <Copy className="w-3 h-3" />
+              Ver código JSON
+            </button>
+            <span>•</span>
+            <button
+              type="button"
+              onClick={handleOpenImportModal}
+              className="text-zinc-400 hover:text-teal-300 underline underline-offset-2 flex items-center gap-1"
+            >
+              <ClipboardPaste className="w-3 h-3" />
+              Pegar texto
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1340,12 +1467,17 @@ export const SyncView: React.FC<SyncViewProps> = ({
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 border-t border-white/10 bg-[#12141c]">
               <button
                 type="button"
-                onClick={() => SyncService.exportSyncFile()}
-                className="flex items-center justify-center gap-1.5 px-3 py-2 bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-white font-medium text-xs rounded-xl transition-colors"
-                title="Descargar archivo .json completo con fotos originales"
+                onClick={handleExportAndShareJson}
+                disabled={isExportingFile}
+                className="flex items-center justify-center gap-1.5 px-3.5 py-2.5 bg-gradient-to-r from-teal-500/20 to-emerald-500/20 hover:from-teal-500/30 hover:to-emerald-500/30 border border-teal-500/40 text-teal-200 hover:text-white font-semibold text-xs rounded-xl transition-all shadow-sm active:scale-95 disabled:opacity-50"
+                title="Descargar archivo .json completo y disparar menú compartir de Android (WhatsApp)"
               >
-                <Download className="w-3.5 h-3.5 text-teal-400" />
-                <span>Descargar archivo .sync.json completo</span>
+                {isExportingFile ? (
+                  <Loader2 className="w-3.5 h-3.5 text-teal-400 animate-spin" />
+                ) : (
+                  <Share2 className="w-3.5 h-3.5 text-teal-400" />
+                )}
+                <span>{isExportingFile ? 'Empaquetando base de datos...' : 'Descargar archivo .sync.json completo'}</span>
               </button>
 
               <button
@@ -1413,12 +1545,17 @@ export const SyncView: React.FC<SyncViewProps> = ({
 
                   <button
                     type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="px-2.5 py-1.5 bg-white/10 hover:bg-white/20 text-zinc-200 font-semibold text-[11px] rounded-lg transition-colors flex items-center gap-1.5 border border-white/10 active:scale-95"
-                    title="Cargar directamente un archivo .json descargado"
+                    onClick={handlePickAndLoadJsonFile}
+                    disabled={isPickingFile}
+                    className="px-2.5 py-1.5 bg-gradient-to-r from-emerald-500/20 to-teal-500/20 hover:from-emerald-500/30 hover:to-teal-500/30 text-emerald-200 font-semibold text-[11px] rounded-lg transition-colors flex items-center gap-1.5 border border-emerald-500/40 active:scale-95 disabled:opacity-50 shadow-sm"
+                    title="Invocar el selector de archivos nativo de Android para seleccionar el .json recibido por WhatsApp"
                   >
-                    <Upload className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>Cargar Archivo .json</span>
+                    {isPickingFile ? (
+                      <Loader2 className="w-3.5 h-3.5 text-emerald-400 animate-spin" />
+                    ) : (
+                      <Upload className="w-3.5 h-3.5 text-emerald-400" />
+                    )}
+                    <span>{isPickingFile ? 'Buscando archivo...' : 'Cargar Archivo .json'}</span>
                   </button>
                 </div>
               </div>

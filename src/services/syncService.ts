@@ -5,6 +5,7 @@ import { ShoppingService } from './shoppingService';
 import { AuthService } from './authService';
 import { AntiTheftService } from './antiTheftService';
 import { compressDataUrl } from '../utils/imageCompressor';
+import { NativeFileService } from './nativeFileService';
 
 export interface OptimizedExportResult {
   json: string;
@@ -619,16 +620,17 @@ export const SyncService = {
     };
   },
 
-  // Export full sync package file (.sync.json)
-  exportSyncFile(): void {
-    const payload = this.createSyncPayload();
-    const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(payload, null, 2));
-    const downloadAnchor = document.createElement('a');
-    downloadAnchor.setAttribute('href', dataStr);
-    downloadAnchor.setAttribute('download', `inventario_${payload.storeCode}_${new Date().toISOString().slice(0, 10)}.sync.json`);
-    document.body.appendChild(downloadAnchor);
-    downloadAnchor.click();
-    downloadAnchor.remove();
+  // Export full sync package file (.json) using Capacitor Filesystem and native Android Share Sheet
+  async exportSyncFile(): Promise<{
+    success: boolean;
+    message: string;
+    fileName?: string;
+    fileUri?: string;
+    productCount?: number;
+    movementCount?: number;
+  }> {
+    const payload = this.createSyncPayload({ stripImages: false });
+    return await NativeFileService.exportAndShareJsonFile(payload);
   },
 
   // Import sync package file or raw JSON text

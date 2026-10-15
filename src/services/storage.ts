@@ -1201,7 +1201,11 @@ export const StorageService = {
       const unifiedProductsMap = new Map<string, Product>();
       localProducts.forEach((lp) => unifiedProductsMap.set(lp.id, { ...lp }));
 
-      // Step 1: Intelligent Product Merging (Fusión inteligente de productos por código de barras)
+      const incomingIsAdmin = bundle.role === 'master' || bundle.userRole === 'admin';
+      const localUser = AuthService.getCurrentUser();
+      const localIsAdmin = localUser?.role === 'admin' || this.getSettings().syncConfig?.role === 'master';
+
+      // Step 1: Intelligent Product Merging (Fusión inteligente de productos por código de barras con prioridad Administrador)
       for (const inc of incomingProducts) {
         const incUnit = cleanCode(inc.barcodeUnit);
         const incBar = cleanCode(inc.barcode);
@@ -1225,15 +1229,32 @@ export const StorageService = {
           const existingInMap = unifiedProductsMap.get(targetId) || matched;
           const unitsPerBulk = Math.max(1, Number(existingInMap.unitsPerBulk || inc.unitsPerBulk || 12));
 
+          // Fusión inteligente de nombres: Prioridad Administrador
+          let resolvedName = existingInMap.name;
+          if (incomingIsAdmin && inc.name && inc.name.trim()) {
+            // El archivo entrante proviene del Administrador: su catálogo oficial prevalece sobre nombres provisorios
+            resolvedName = inc.name.trim();
+          } else if (localIsAdmin && existingInMap.name && existingInMap.name.trim()) {
+            // El dispositivo local es el Administrador: se preserva su nombre oficial
+            resolvedName = existingInMap.name.trim();
+          } else {
+            resolvedName = (inc.name && inc.name.trim()) || existingInMap.name || 'Producto';
+          }
+
+          // Prioridad de categoría/pasillo oficial del Administrador
+          const resolvedCategory = (incomingIsAdmin && inc.category)
+            ? inc.category
+            : (existingInMap.category || inc.category || 'General');
+
           const merged: Product = {
             ...existingInMap,
-            name: existingInMap.name || inc.name,
+            name: resolvedName,
             barcode: existingInMap.barcode || inc.barcode || inc.barcodeUnit,
             barcodeUnit: existingInMap.barcodeUnit || inc.barcodeUnit || inc.barcode,
             barcodeBulk: existingInMap.barcodeBulk || inc.barcodeBulk,
             unitsPerBulk,
             bulkUnitName: existingInMap.bulkUnitName || inc.bulkUnitName || `Caja x${unitsPerBulk}`,
-            category: existingInMap.category || inc.category || 'General',
+            category: resolvedCategory,
             costPrice: Number(existingInMap.costPrice || inc.costPrice || 0),
             sellingPrice: Number(existingInMap.sellingPrice || inc.sellingPrice || 0),
             costPriceBulk: Number(existingInMap.costPriceBulk || inc.costPriceBulk || 0),
