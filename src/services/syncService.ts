@@ -151,6 +151,14 @@ export const SyncService = {
       shoppingList: ShoppingService.getShoppingList(),
       replenishmentList: ShoppingService.getReplenishmentList(),
       categories: StorageService.getCategories(),
+      expirations: (() => {
+        try {
+          const raw = localStorage.getItem('depos_expiration_agenda');
+          return raw ? JSON.parse(raw) : [];
+        } catch {
+          return [];
+        }
+      })(),
       settings: StorageService.getSettings(),
     };
   },
@@ -620,21 +628,34 @@ export const SyncService = {
     };
   },
 
-  // Export full sync package file (.json) using Capacitor Filesystem and native Android Share Sheet
-  async exportSyncFile(): Promise<{
-    success: boolean;
-    message: string;
-    fileName?: string;
-    fileUri?: string;
-    productCount?: number;
-    movementCount?: number;
-  }> {
-    const payload = this.createSyncPayload({ stripImages: false });
-    return await NativeFileService.exportAndShareJsonFile(payload);
+  // Export light sync package file (.json) without photos (fast daily sync)
+  async exportLightSyncFile() {
+    return await NativeFileService.exportAndShareJsonFile({ mode: 'light', stripImages: true });
   },
 
-  // Import sync package file or raw JSON text
-  importSyncFile(fileContent: string): { success: boolean; message: string; count?: number; newProductsCount?: number } {
+  // Export full sync package file (.json) with photos/icons (initial cloning)
+  async exportFullSyncFile() {
+    return await NativeFileService.exportAndShareJsonFile({ mode: 'full', stripImages: false });
+  },
+
+  // Export full sync package file (.json) using Capacitor Filesystem and native Android Share Sheet (legacy helper)
+  async exportSyncFile() {
+    return await this.exportFullSyncFile();
+  },
+
+  // Import sync package file or raw JSON text with automatic recognition of photos/light mode
+  importSyncFile(fileContent: string): {
+    success: boolean;
+    message: string;
+    count?: number;
+    newProductsCount?: number;
+    hasPhotos?: boolean;
+    photosCount?: number;
+    exportType?: 'light' | 'full';
+    mergedProductsCount?: number;
+    mergedMovementsCount?: number;
+    recalculatedCount?: number;
+  } {
     try {
       const trimmed = (fileContent || '').trim();
       if (!trimmed) {
@@ -645,9 +666,30 @@ export const SyncService = {
       if (trimmed.length === 20000 || (trimmed.length >= 19900 && trimmed.length <= 20100 && !trimmed.endsWith('}'))) {
         return {
           success: false,
-          message: 'Error: El texto fue cortado a los 20,000 caracteres por el portapapeles de Android (Unterminated string at 20000). En el dispositivo emisor, exporta activando la opción "Exportar sin fotos" o transfiérelo cargando el archivo .json directamente.',
+          message: 'Error: El texto fue cortado a los 20,000 caracteres por el portapapeles de Android (Unterminated string at 20000). En el dispositivo emisor, exporta con la opción "Exportar Copia Ligera (Sin Fotos)" o transfiérelo cargando el archivo .json directamente.',
         };
       }
+
+      // Inspect incoming bundle for photos
+      let bundle: any = null;
+      try {
+        const raw = JSON.parse(trimmed);
+        bundle = raw.data ? raw.data : raw;
+      } catch (err: any) {
+        return {
+          success: false,
+          message: 'El archivo seleccionado no tiene un formato JSON válido: ' + (err?.message || err),
+        };
+      }
+
+      const incomingProds = Array.isArray(bundle?.products)
+        ? bundle.products
+        : (Array.isArray(bundle) ? bundle : []);
+      const photosCount = incomingProds.filter(
+        (p: any) => p && typeof p.image === 'string' && p.image.trim().length > 50
+      ).length;
+      const hasPhotos = photosCount > 0;
+      const exportType: 'light' | 'full' = hasPhotos ? 'full' : 'light';
 
       // Run intelligent barcode fusion, timestamp movement deduplication, and mathematical stock recalculation
       const importResult = StorageService.importBackup(trimmed);
@@ -655,33 +697,47 @@ export const SyncService = {
         return {
           success: false,
           message: importResult.message,
+          hasPhotos,
+          photosCount,
+          exportType,
         };
       }
 
       // Update sync configuration timestamp
       try {
-        const payload = JSON.parse(trimmed);
         const config = this.getDeviceConfig();
         this.saveDeviceConfig({
           ...config,
-          syncCode: payload.storeCode || payload.syncCode || config.syncCode,
+          syncCode: bundle.storeCode || bundle.syncCode || config.syncCode,
           lastSyncTimestamp: new Date().toISOString(),
         });
         AntiTheftService.recordSuccessfulSync();
       } catch {}
 
+      const typeDesc = hasPhotos
+        ? `Copia Completa (${photosCount} fotos/iconos importados)`
+        : `Copia Ligera (sin fotos, fotos locales existentes preservadas)`;
+
+      const transparentMsg = `¡${hasPhotos ? 'Copia Completa (Con Fotos)' : 'Copia Ligera (Sin Fotos)'} reconocida y procesada con éxito! Se unificaron ${importResult.mergedProductsCount} productos, pasillos y ${importResult.mergedMovementsCount} movimientos. Se recalcularon existencias en ${importResult.recalculatedCount} artículo(s). (${typeDesc})`;
+
       return {
         success: true,
-        message: importResult.message,
+        message: transparentMsg,
         count: importResult.mergedProductsCount,
         newProductsCount: importResult.recalculatedCount,
+        hasPhotos,
+        photosCount,
+        exportType,
+        mergedProductsCount: importResult.mergedProductsCount,
+        mergedMovementsCount: importResult.mergedMovementsCount,
+        recalculatedCount: importResult.recalculatedCount,
       };
     } catch (e: any) {
       const errStr = e?.message || '';
       if (errStr.includes('position 20000') || (fileContent && fileContent.length >= 19900 && fileContent.length <= 20100)) {
         return {
           success: false,
-          message: 'Error: El texto fue cortado a los 20,000 caracteres por el portapapeles de Android (Unterminated string at position 20000). En el teléfono emisor, exporta activando "Modo sin fotos" o carga el archivo .json directamente.',
+          message: 'Error: El texto fue cortado a los 20,000 caracteres por el portapapeles de Android (Unterminated string at position 20000). En el teléfono emisor, exporta activando "Exportar Copia Ligera (Sin Fotos)" o carga el archivo .json directamente.',
         };
       }
       return { success: false, message: 'Error al procesar el archivo o texto JSON: ' + errStr };

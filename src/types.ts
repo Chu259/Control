@@ -170,6 +170,7 @@ export interface SyncPayload {
   shoppingList?: ShoppingListItem[];
   replenishmentList?: ReplenishmentItem[];
   categories: Category[];
+  expirations?: ExpirationItem[];
   settings: StoreSettings;
   reviewedProductIds?: string[];
   newProductsAlerts?: string[];

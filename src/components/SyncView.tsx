@@ -78,7 +78,8 @@ export const SyncView: React.FC<SyncViewProps> = ({
   const [copiedJson, setCopiedJson] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [forceStripImages, setForceStripImages] = useState(false);
-  const [isExportingFile, setIsExportingFile] = useState(false);
+  const [exportingMode, setExportingMode] = useState<'light' | 'full' | null>(null);
+  const isExportingFile = exportingMode !== null;
   const [isPickingFile, setIsPickingFile] = useState(false);
   const [exportOptState, setExportOptState] = useState<{
     isGenerating: boolean;
@@ -456,11 +457,11 @@ export const SyncView: React.FC<SyncViewProps> = ({
     }
   };
 
-  // Requirement 1: Generar y Exportar Archivo .json Real vía @capacitor/filesystem y disparar menú nativo de compartir de Android (WhatsApp)
-  const handleExportAndShareJson = async () => {
-    setIsExportingFile(true);
+  // 1. Botón "Exportar Copia Ligera (Sin Fotos)": 152 productos, stock, pasillos y movimientos omitiendo Base64
+  const handleExportLightJson = async () => {
+    setExportingMode('light');
     try {
-      const res = await NativeFileService.exportAndShareJsonFile();
+      const res = await NativeFileService.exportAndShareJsonFile({ mode: 'light', stripImages: true });
       if (res.success) {
         Sound.playSuccessChime();
         setMessage({
@@ -474,15 +475,45 @@ export const SyncView: React.FC<SyncViewProps> = ({
         });
       }
     } catch (err: any) {
-      console.error('Error exportando archivo .json:', err);
+      console.error('Error exportando copia ligera .json:', err);
       setMessage({
         type: 'error',
-        text: `Error al exportar archivo: ${err?.message || 'Error desconocido'}`,
+        text: `Error al exportar copia ligera: ${err?.message || 'Error desconocido'}`,
       });
     } finally {
-      setIsExportingFile(false);
+      setExportingMode(null);
     }
   };
+
+  // 2. Botón "Exportar Copia Completa (Con Fotos/Iconos)": 100% base de datos con fotos Base64
+  const handleExportFullJson = async () => {
+    setExportingMode('full');
+    try {
+      const res = await NativeFileService.exportAndShareJsonFile({ mode: 'full', stripImages: false });
+      if (res.success) {
+        Sound.playSuccessChime();
+        setMessage({
+          type: 'success',
+          text: res.message,
+        });
+      } else {
+        setMessage({
+          type: 'error',
+          text: res.message,
+        });
+      }
+    } catch (err: any) {
+      console.error('Error exportando copia completa .json:', err);
+      setMessage({
+        type: 'error',
+        text: `Error al exportar copia completa: ${err?.message || 'Error desconocido'}`,
+      });
+    } finally {
+      setExportingMode(null);
+    }
+  };
+
+  const handleExportAndShareJson = handleExportFullJson;
 
   // Requirement 2: Activar Selector de Archivos (File Picker) en Importación del empleado
   const handlePickAndLoadJsonFile = async () => {
@@ -1289,43 +1320,137 @@ export const SyncView: React.FC<SyncViewProps> = ({
           </span>
         </div>
 
-        <p className="text-xs text-zinc-300 leading-relaxed">
-          Para transferir la base de datos completa (catálogo de 152 productos, stock, pasillos y movimientos) superando cualquier límite de texto de WhatsApp:
-        </p>
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-zinc-200 uppercase tracking-wide flex items-center gap-1.5">
+              <Share2 className="w-3.5 h-3.5 text-teal-400" />
+              <span>Opciones de Exportación para el Administrador:</span>
+            </span>
+            <span className="text-[11px] text-zinc-400 font-mono">
+              {products.length} productos • {movements.length} movs
+            </span>
+          </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {/* Botón 1: Descargar archivo .sync.json completo y disparar menú compartir Android */}
-          <button
-            id="export-sync-file-btn"
-            type="button"
-            onClick={handleExportAndShareJson}
-            disabled={isExportingFile}
-            className="flex items-center justify-center gap-2 p-3.5 rounded-xl bg-gradient-to-r from-teal-500/20 to-emerald-500/20 hover:from-teal-500/30 hover:to-emerald-500/30 border border-teal-500/40 text-teal-200 font-bold text-xs transition-all active:scale-95 disabled:opacity-50 shadow-md"
-            title="Empaquetar toda la base de datos en un archivo físico .json y abrir el menú de compartir de Android para WhatsApp"
-          >
-            {isExportingFile ? (
-              <Loader2 className="w-4 h-4 text-teal-400 animate-spin" />
-            ) : (
-              <Share2 className="w-4 h-4 text-teal-400" />
-            )}
-            <span>{isExportingFile ? 'Empaquetando .json...' : 'Descargar archivo .sync.json completo'}</span>
-          </button>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {/* Botón 1: Exportar Copia Ligera (Sin Fotos) */}
+            <button
+              id="btn-export-light-sync"
+              type="button"
+              onClick={handleExportLightJson}
+              disabled={isExportingFile}
+              className="group relative flex flex-col p-3.5 rounded-xl bg-gradient-to-br from-teal-500/15 via-emerald-500/10 to-transparent hover:from-teal-500/25 hover:via-emerald-500/20 hover:to-teal-500/10 border border-teal-500/35 hover:border-teal-400/50 text-left transition-all active:scale-[0.98] disabled:opacity-50 shadow-md cursor-pointer"
+              title="Generar archivo .json con los 152 productos, stock, movimientos y pasillos de colores, pero omitiendo las cadenas pesadas de Base64 de las imágenes. Ideal para la sincronización rápida diaria."
+            >
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-teal-500/20 text-teal-300 flex items-center justify-center border border-teal-500/30">
+                    {exportingMode === 'light' ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-teal-300" />
+                    ) : (
+                      <ImageOff className="w-4 h-4 text-teal-300 group-hover:scale-110 transition-transform" />
+                    )}
+                  </div>
+                  <span className="text-xs font-bold text-white group-hover:text-teal-200 transition-colors">
+                    Exportar Copia Ligera (Sin Fotos)
+                  </span>
+                </div>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-teal-500/20 text-teal-300 border border-teal-500/30 font-semibold font-mono">
+                  Rápido / Diario
+                </span>
+              </div>
+              <p className="text-[11px] text-zinc-300 leading-snug">
+                Genera el archivo <span className="text-teal-300 font-mono font-medium">.json</span> con los {products.length} productos, stock, movimientos y pasillos de colores, omitiendo las cadenas pesadas de fotos Base64.
+              </p>
+              <div className="mt-2.5 pt-2 border-t border-white/5 flex items-center justify-between text-[10px] text-teal-400 font-medium">
+                <span className="flex items-center gap-1">
+                  <Share2 className="w-3 h-3" />
+                  {exportingMode === 'light' ? 'Guardando archivo en Android...' : 'Compartir por WhatsApp (Documento)'}
+                </span>
+                <span className="text-zinc-400 font-mono">~25-45 KB</span>
+              </div>
+            </button>
 
-          {/* Botón 2: Cargar Archivo .json invocando selector de archivos nativo */}
+            {/* Botón 2: Exportar Copia Completa (Con Fotos/Iconos) */}
+            <button
+              id="btn-export-full-sync"
+              type="button"
+              onClick={handleExportFullJson}
+              disabled={isExportingFile}
+              className="group relative flex flex-col p-3.5 rounded-xl bg-gradient-to-br from-indigo-500/15 via-purple-500/10 to-transparent hover:from-indigo-500/25 hover:via-purple-500/20 hover:to-indigo-500/10 border border-indigo-500/35 hover:border-indigo-400/50 text-left transition-all active:scale-[0.98] disabled:opacity-50 shadow-md cursor-pointer"
+              title="Generar archivo .json empaquetando absolutamente toda la base de datos, incluyendo los códigos Base64 de las imágenes de los productos. Ideal para el clonado inicial en el teléfono de un empleado nuevo."
+            >
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-indigo-500/20 text-indigo-300 flex items-center justify-center border border-indigo-500/30">
+                    {exportingMode === 'full' ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-indigo-300" />
+                    ) : (
+                      <Layers className="w-4 h-4 text-indigo-300 group-hover:scale-110 transition-transform" />
+                    )}
+                  </div>
+                  <span className="text-xs font-bold text-white group-hover:text-indigo-200 transition-colors">
+                    Exportar Copia Completa (Con Fotos/Iconos)
+                  </span>
+                </div>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-semibold font-mono">
+                  Clonado Inicial
+                </span>
+              </div>
+              <p className="text-[11px] text-zinc-300 leading-snug">
+                Empaqueta el 100% de la base de datos con los {products.length} productos, códigos Base64 de imágenes, stock, pasillos y movimientos.
+              </p>
+              <div className="mt-2.5 pt-2 border-t border-white/5 flex items-center justify-between text-[10px] text-indigo-400 font-medium">
+                <span className="flex items-center gap-1">
+                  <Share2 className="w-3 h-3" />
+                  {exportingMode === 'full' ? 'Guardando archivo en Android...' : 'Compartir por WhatsApp (Documento)'}
+                </span>
+                <span className="text-zinc-400 font-mono">Base completa</span>
+              </div>
+            </button>
+          </div>
+        </div>
+
+        {/* Sección de Importación del Empleado */}
+        <div className="pt-3 border-t border-white/10 space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-zinc-200 uppercase tracking-wide flex items-center gap-1.5">
+              <Upload className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Importación del Empleado (Cargar Archivo .json Recibido):</span>
+            </span>
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-mono">
+              Auto-detecta fotos / copia ligera
+            </span>
+          </div>
+
           <button
             id="import-sync-modal-btn"
             type="button"
             onClick={handlePickAndLoadJsonFile}
             disabled={isPickingFile}
-            className="flex items-center justify-center gap-2 p-3.5 rounded-xl bg-gradient-to-r from-emerald-500/20 to-teal-500/20 hover:from-emerald-500/30 hover:to-teal-500/30 border border-emerald-500/40 text-emerald-200 font-bold text-xs transition-all active:scale-95 disabled:opacity-50 shadow-md"
+            className="w-full flex items-center justify-between p-3.5 rounded-xl bg-gradient-to-r from-emerald-500/20 via-teal-500/15 to-emerald-500/20 hover:from-emerald-500/30 hover:to-teal-500/25 border border-emerald-500/40 text-left transition-all active:scale-[0.99] disabled:opacity-50 shadow-md cursor-pointer group"
             title="Invocar el selector de archivos nativo de Android para seleccionar el .json recibido por WhatsApp"
           >
-            {isPickingFile ? (
-              <Loader2 className="w-4 h-4 text-emerald-400 animate-spin" />
-            ) : (
-              <Upload className="w-4 h-4 text-emerald-400" />
-            )}
-            <span>{isPickingFile ? 'Abriendo selector...' : 'Cargar Archivo .json'}</span>
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-emerald-500/25 text-emerald-300 flex items-center justify-center border border-emerald-500/40">
+                {isPickingFile ? (
+                  <Loader2 className="w-4 h-4 text-emerald-300 animate-spin" />
+                ) : (
+                  <Upload className="w-4 h-4 text-emerald-300 group-hover:-translate-y-0.5 transition-transform" />
+                )}
+              </div>
+              <div>
+                <div className="text-xs font-bold text-white group-hover:text-emerald-200 transition-colors flex items-center gap-2">
+                  <span>{isPickingFile ? 'Abriendo selector nativo de Android...' : 'Cargar Archivo .json'}</span>
+                  <span className="text-[10px] font-mono text-emerald-300/80 bg-emerald-950/60 px-1.5 py-0.5 rounded">
+                    File Picker
+                  </span>
+                </div>
+                <p className="text-[11px] text-zinc-300 mt-0.5">
+                  Selecciona el archivo recibido por WhatsApp. El importador reconoce automáticamente si trae fotos o no, fusionando nombres (prioridad admin) y recalculando existencias de forma transparente.
+                </p>
+              </div>
+            </div>
+            <ArrowRight className="w-4 h-4 text-emerald-400 group-hover:translate-x-1 transition-transform flex-shrink-0" />
           </button>
         </div>
 
@@ -1465,25 +1590,42 @@ export const SyncView: React.FC<SyncViewProps> = ({
 
             {/* Modal Footer */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 border-t border-white/10 bg-[#12141c]">
-              <button
-                type="button"
-                onClick={handleExportAndShareJson}
-                disabled={isExportingFile}
-                className="flex items-center justify-center gap-1.5 px-3.5 py-2.5 bg-gradient-to-r from-teal-500/20 to-emerald-500/20 hover:from-teal-500/30 hover:to-emerald-500/30 border border-teal-500/40 text-teal-200 hover:text-white font-semibold text-xs rounded-xl transition-all shadow-sm active:scale-95 disabled:opacity-50"
-                title="Descargar archivo .json completo y disparar menú compartir de Android (WhatsApp)"
-              >
-                {isExportingFile ? (
-                  <Loader2 className="w-3.5 h-3.5 text-teal-400 animate-spin" />
-                ) : (
-                  <Share2 className="w-3.5 h-3.5 text-teal-400" />
-                )}
-                <span>{isExportingFile ? 'Empaquetando base de datos...' : 'Descargar archivo .sync.json completo'}</span>
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleExportLightJson}
+                  disabled={isExportingFile}
+                  className="flex items-center justify-center gap-1.5 px-3 py-2 bg-gradient-to-r from-teal-500/20 to-emerald-500/20 hover:from-teal-500/30 hover:to-emerald-500/30 border border-teal-500/40 text-teal-200 hover:text-white font-semibold text-xs rounded-xl transition-all shadow-sm active:scale-95 disabled:opacity-50"
+                  title="Exportar archivo .json ligero sin fotos para WhatsApp diario"
+                >
+                  {exportingMode === 'light' ? (
+                    <Loader2 className="w-3.5 h-3.5 text-teal-400 animate-spin" />
+                  ) : (
+                    <ImageOff className="w-3.5 h-3.5 text-teal-400" />
+                  )}
+                  <span>{exportingMode === 'light' ? 'Empaquetando...' : 'Exportar Copia Ligera (Sin Fotos)'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleExportFullJson}
+                  disabled={isExportingFile}
+                  className="flex items-center justify-center gap-1.5 px-3 py-2 bg-gradient-to-r from-indigo-500/20 to-purple-500/20 hover:from-indigo-500/30 hover:to-purple-500/30 border border-indigo-500/40 text-indigo-200 hover:text-white font-semibold text-xs rounded-xl transition-all shadow-sm active:scale-95 disabled:opacity-50"
+                  title="Exportar archivo .json completo con fotos Base64 para clonado inicial"
+                >
+                  {exportingMode === 'full' ? (
+                    <Loader2 className="w-3.5 h-3.5 text-indigo-400 animate-spin" />
+                  ) : (
+                    <Layers className="w-3.5 h-3.5 text-indigo-400" />
+                  )}
+                  <span>{exportingMode === 'full' ? 'Empaquetando...' : 'Exportar Copia Completa (Con Fotos)'}</span>
+                </button>
+              </div>
 
               <button
                 type="button"
                 onClick={() => setExportModalOpen(false)}
-                className="px-4 py-2 bg-white/10 hover:bg-white/15 text-white font-medium text-xs rounded-xl transition-colors"
+                className="px-4 py-2 bg-white/10 hover:bg-white/15 text-white font-medium text-xs rounded-xl transition-colors self-end sm:self-auto"
               >
                 Cerrar
               </button>

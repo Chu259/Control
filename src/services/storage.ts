@@ -1259,8 +1259,10 @@ export const StorageService = {
             sellingPrice: Number(existingInMap.sellingPrice || inc.sellingPrice || 0),
             costPriceBulk: Number(existingInMap.costPriceBulk || inc.costPriceBulk || 0),
             sellingPriceBulk: Number(existingInMap.sellingPriceBulk || inc.sellingPriceBulk || 0),
-            // Preservar fotos locales si existen, o tomar la entrante
-            image: existingInMap.image || inc.image,
+            // Preservar fotos locales en copia ligera, o adoptar foto oficial del Administrador en copia completa
+            image: (incomingIsAdmin && inc.image && inc.image.trim().length > 50)
+              ? inc.image
+              : (existingInMap.image || inc.image),
             suggestedGondolaQuantity: existingInMap.suggestedGondolaQuantity || inc.suggestedGondolaQuantity,
             minStockAlert: existingInMap.minStockAlert || inc.minStockAlert || 5,
             minStockAlertUnit: existingInMap.minStockAlertUnit || inc.minStockAlertUnit,
@@ -1348,12 +1350,17 @@ export const StorageService = {
       this.saveProducts(finalProducts);
       this.saveMovements(mergedMovements.slice(0, 1000));
 
-      // Fusión opcional de categorías
+      // Fusión de categorías y pasillos de colores
       if (Array.isArray(bundle.categories)) {
         const currentCats = this.getCategories();
         for (const cat of bundle.categories) {
-          if (!currentCats.some((c) => c.id === cat.id || c.name.toLowerCase() === cat.name.toLowerCase())) {
+          const idx = currentCats.findIndex(
+            (c) => c.id === cat.id || c.name.toLowerCase() === cat.name.toLowerCase()
+          );
+          if (idx === -1) {
             currentCats.push(cat);
+          } else if (incomingIsAdmin && cat.color) {
+            currentCats[idx] = { ...currentCats[idx], ...cat };
           }
         }
         this.saveCategories(currentCats);

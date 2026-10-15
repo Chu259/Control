@@ -22,30 +22,97 @@ export function decodeBase64ToUtf8(base64Str: string): string {
   }
 }
 
+export interface ExportFileOptions {
+  mode?: 'light' | 'full';
+  stripImages?: boolean;
+  customPayload?: SyncPayload;
+}
+
 export const NativeFileService = {
   /**
-   * Empaqueta toda la base de datos (catálogo de 152 productos, stock, pasillos y movimientos)
-   * en un archivo físico real con extensión ".json" guardado en la carpeta local de la app
-   * usando @capacitor/filesystem, y dispara el menú nativo de compartir de Android (para WhatsApp).
+   * Empaqueta la base de datos en un archivo físico real ".json" guardado en la carpeta local de la app
+   * usando @capacitor/filesystem, y dispara el menú nativo de compartir de Android (para WhatsApp como documento).
+   * 
+   * Modos soportados:
+   * 1. 'light': Copia Ligera (Sin Fotos) - Omite Base64 pesados para sincronización rápida diaria.
+   * 2. 'full': Copia Completa (Con Fotos/Iconos) - Empaqueta el 100% con imágenes para clonado inicial en un teléfono nuevo.
    */
-  async exportAndShareJsonFile(customPayload?: SyncPayload): Promise<{
+  async exportAndShareJsonFile(
+    optionsOrPayload?: SyncPayload | ExportFileOptions
+  ): Promise<{
     success: boolean;
     message: string;
     fileName?: string;
     fileUri?: string;
     productCount?: number;
     movementCount?: number;
+    mode?: 'light' | 'full';
+    hasImages?: boolean;
+    fileSizeBytes?: number;
+    formattedSize?: string;
   }> {
     try {
-      // 1. Obtener payload completo sin recortar fotos ni registros
-      const payload = customPayload || SyncService.createSyncPayload({ stripImages: false });
+      let stripImages = false;
+      let mode: 'light' | 'full' = 'full';
+      let customPayload: SyncPayload | undefined;
+
+      if (optionsOrPayload) {
+        if ('products' in optionsOrPayload || 'storeCode' in optionsOrPayload) {
+          customPayload = optionsOrPayload as SyncPayload;
+          mode = 'full';
+          stripImages = false;
+        } else {
+          const opts = optionsOrPayload as ExportFileOptions;
+          mode = opts.mode || (opts.stripImages ? 'light' : 'full');
+          stripImages = mode === 'light' || opts.stripImages === true;
+          customPayload = opts.customPayload;
+        }
+      }
+
+      // 1. Obtener payload según la opción seleccionada
+      const payload: SyncPayload = customPayload
+        ? { ...customPayload }
+        : SyncService.createSyncPayload({ stripImages });
+
+      if (stripImages) {
+        if (payload.products) {
+          payload.products = payload.products.map((p) => {
+            const copy = { ...p };
+            delete copy.image;
+            return copy;
+          });
+        }
+        if (payload.localPendingProducts) {
+          payload.localPendingProducts = payload.localPendingProducts.map((p) => {
+            const copy = { ...p };
+            delete copy.image;
+            return copy;
+          });
+        }
+      }
+
       const productCount = payload.products?.length || 0;
       const movementCount = payload.movements?.length || 0;
       const storeCode = (payload.storeCode || 'DEPOS').trim().toUpperCase();
       const dateStr = new Date().toISOString().slice(0, 10);
-      const fileName = `inventario_${storeCode}_${dateStr}.json`;
+      const isLight = mode === 'light' || stripImages;
+
+      // Nombre descriptivo según el tipo de copia
+      const filePrefix = isLight ? 'inventario_ligero' : 'inventario_completo';
+      const fileName = `${filePrefix}_${storeCode}_${dateStr}.json`;
 
       const jsonString = JSON.stringify(payload, null, 2);
+      const sizeBytes = new Blob([jsonString]).size;
+      const sizeKB = sizeBytes / 1024;
+      const formattedSize = sizeKB > 1024 ? `${(sizeKB / 1024).toFixed(2)} MB` : `${sizeKB.toFixed(1)} KB`;
+
+      const title = isLight
+        ? `Copia Ligera de Inventario (${storeCode}) - Sin Fotos`
+        : `Copia Completa de Inventario (${storeCode}) - Con Fotos e Iconos`;
+
+      const shareText = isLight
+        ? `Base de datos rápida de ${storeCode} (${dateStr}): ${productCount} productos, stock, pasillos y ${movementCount} movimientos (Copia Ligera sin fotos, tamaño ${formattedSize}). Enviar como documento adjunto por WhatsApp.`
+        : `Base de datos completa de ${storeCode} (${dateStr}): ${productCount} productos con fotos Base64, stock, pasillos y ${movementCount} movimientos (Copia Completa para clonado inicial, tamaño ${formattedSize}). Enviar como documento adjunto por WhatsApp.`;
 
       // 2. Si estamos en Android nativo (Capacitor)
       if (Capacitor.isNativePlatform()) {
@@ -69,22 +136,30 @@ export const NativeFileService = {
 
         // 3. Disparar nativamente el menú de compartir de Android
         await Share.share({
-          title: `Copia de Inventario (${storeCode})`,
-          text: `Base de datos completa de ${storeCode} (${dateStr}): ${productCount} artículos y ${movementCount} movimientos. Enviar como documento adjunto.`,
+          title,
+          text: shareText,
           url: nativeUri,
           files: [nativeUri],
-          dialogTitle: 'Enviar archivo .json por WhatsApp',
+          dialogTitle: isLight
+            ? 'Compartir Copia Ligera por WhatsApp (Documento)'
+            : 'Compartir Copia Completa por WhatsApp (Documento)',
         });
 
         Sound.playSuccessChime();
 
         return {
           success: true,
-          message: `Archivo "${fileName}" creado con éxito y enviado al menú de compartir de Android.`,
+          message: isLight
+            ? `Archivo ligero "${fileName}" (${formattedSize}) generado con éxito en el almacenamiento local y enviado al menú de compartir.`
+            : `Archivo completo "${fileName}" (${formattedSize}) generado con éxito con fotos Base64 y enviado al menú de compartir.`,
           fileName,
           fileUri: nativeUri,
           productCount,
           movementCount,
+          mode: isLight ? 'light' : 'full',
+          hasImages: !isLight,
+          fileSizeBytes: sizeBytes,
+          formattedSize,
         };
       }
 
@@ -96,17 +171,21 @@ export const NativeFileService = {
       if (typeof navigator !== 'undefined' && navigator.canShare && navigator.canShare({ files: [file] })) {
         try {
           await navigator.share({
-            title: `Copia de Inventario (${storeCode})`,
-            text: `Base de datos completa de ${storeCode}: ${productCount} productos.`,
+            title,
+            text: shareText,
             files: [file],
           });
           Sound.playSuccessChime();
           return {
             success: true,
-            message: `Menú de compartir ejecutado con el archivo "${fileName}".`,
+            message: `Menú de compartir ejecutado con el archivo "${fileName}" (${formattedSize}).`,
             fileName,
             productCount,
             movementCount,
+            mode: isLight ? 'light' : 'full',
+            hasImages: !isLight,
+            fileSizeBytes: sizeBytes,
+            formattedSize,
           };
         } catch (e: any) {
           if (e.name === 'AbortError') {
@@ -116,6 +195,10 @@ export const NativeFileService = {
               fileName,
               productCount,
               movementCount,
+              mode: isLight ? 'light' : 'full',
+              hasImages: !isLight,
+              fileSizeBytes: sizeBytes,
+              formattedSize,
             };
           }
           console.warn('Web Share failed, proceeding with download fallback:', e);
@@ -136,10 +219,14 @@ export const NativeFileService = {
 
       return {
         success: true,
-        message: `Archivo "${fileName}" descargado correctamente (${productCount} productos).`,
+        message: `Archivo "${fileName}" descargado correctamente (${productCount} productos, ${formattedSize}).`,
         fileName,
         productCount,
         movementCount,
+        mode: isLight ? 'light' : 'full',
+        hasImages: !isLight,
+        fileSizeBytes: sizeBytes,
+        formattedSize,
       };
     } catch (err: any) {
       console.error('Error in exportAndShareJsonFile:', err);
