@@ -9,6 +9,17 @@ const STORAGE_KEYS = {
   IS_LOCKED: 'stock_app_is_locked_v1',
 };
 
+const AVATAR_COLORS = [
+  '#0284c7', // Sky Blue
+  '#8b5cf6', // Purple
+  '#10b981', // Emerald
+  '#f59e0b', // Amber
+  '#ec4899', // Pink
+  '#06b6d4', // Cyan
+  '#f97316', // Orange
+  '#6366f1', // Indigo
+];
+
 const DEFAULT_USERS: AppUser[] = [
   {
     id: 'user-admin-1',
@@ -424,13 +435,192 @@ export const AuthService = {
   },
 
   /**
-   * Procesa e integra la sección de usuarios proveniente del archivo .json exportado por el Administrador.
-   * Da de alta automáticamente a nuevos operarios (ej. Tiki), actualiza contraseñas reales y roles,
-   * permitiendo el uso inmediato de la Llave Maestra por el Administrador y aplicando las restricciones de menú al empleado.
+   * Extrae la lista de usuarios de cualquier nivel de anidación o estructura del JSON exportado.
    */
+  extractUsersFromPayload(raw: any): any[] | null {
+    if (!raw) return null;
+    if (typeof raw === 'string') {
+      try {
+        const parsed = JSON.parse(raw);
+        return this.extractUsersFromPayload(parsed);
+      } catch {
+        return null;
+      }
+    }
+    if (Array.isArray(raw)) {
+      if (raw.length > 0 && raw[0] && (raw[0].role || raw[0].username || raw[0].pin || raw[0].password)) {
+        return raw;
+      }
+      return null;
+    }
+    if (Array.isArray(raw.users) && raw.users.length > 0) return raw.users;
+    if (Array.isArray(raw.Users) && raw.Users.length > 0) return raw.Users;
+    if (Array.isArray(raw.usuarios) && raw.usuarios.length > 0) return raw.usuarios;
+    if (Array.isArray(raw.operarios) && raw.operarios.length > 0) return raw.operarios;
+    if (Array.isArray(raw.userList) && raw.userList.length > 0) return raw.userList;
+    if (raw.data) {
+      const fromData = this.extractUsersFromPayload(raw.data);
+      if (fromData) return fromData;
+    }
+    if (raw.payload) {
+      const fromPayload = this.extractUsersFromPayload(raw.payload);
+      if (fromPayload) return fromPayload;
+    }
+    if (raw.bundle) {
+      const fromBundle = this.extractUsersFromPayload(raw.bundle);
+      if (fromBundle) return fromBundle;
+    }
+    return null;
+  },
+
+  /**
+   * Forzar el Volcado de la Tabla de Usuarios:
+   * Limpia por completo la tabla local de usuarios del celular del empleado (borrando
+   * todos los accesos genéricos de fábrica como Carlos, Lucía, admin genérico) e inyecta
+   * directamente la lista completa de 'Usuarios, Roles, PINs cifrados y Permisos' que
+   * vienen en el archivo del Administrador.
+   */
+  forceInjectUsersTable(incomingUsers: any[]): {
+    success: boolean;
+    count: number;
+    users: AppUser[];
+    activeUser: AppUser;
+    userNames: string[];
+    operatorNames: string[];
+  } {
+    if (!Array.isArray(incomingUsers) || incomingUsers.length === 0) {
+      return {
+        success: false,
+        count: 0,
+        users: this.getUsers(),
+        activeUser: this.getCurrentUser(),
+        userNames: [],
+        operatorNames: [],
+      };
+    }
+
+    const cleanStr = (s?: string) => (s || '').trim().toLowerCase();
+
+    // Sanitizar y validar cada usuario transferido del Administrador
+    const sanitizedUsers: AppUser[] = incomingUsers
+      .filter((u) => u && (u.name || u.username))
+      .map((u, index) => {
+        const rawRole = cleanStr(u.role);
+        const role: UserRole = rawRole === 'admin' ? 'admin' : 'user';
+        const name = String(u.name || u.username || `Usuario ${index + 1}`).trim();
+        const username =
+          (u.username && cleanStr(u.username).replace(/\s+/g, '')) ||
+          cleanStr(name).replace(/\s+/g, '') ||
+          `user_${index + 1}`;
+        const rawPin =
+          u.pin !== undefined && u.pin !== null && String(u.pin).trim() !== ''
+            ? String(u.pin).trim()
+            : u.password !== undefined && u.password !== null && String(u.password).trim() !== ''
+            ? String(u.password).trim()
+            : u.pinCode !== undefined && u.pinCode !== null && String(u.pinCode).trim() !== ''
+            ? String(u.pinCode).trim()
+            : '';
+        const pin = rawPin || (role === 'admin' ? '1234' : '0000');
+
+        const permissions =
+          Array.isArray(u.permissions) && u.permissions.length > 0
+            ? u.permissions
+            : role === 'admin'
+            ? ['all']
+            : ['inventory', 'dummies', 'replenishment', 'shopping', 'alerts', 'sync', 'expirations'];
+
+        return {
+          id: u.id || `user-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 6)}`,
+          name,
+          username,
+          pin,
+          role,
+          phoneLockEnabled: u.phoneLockEnabled !== undefined ? Boolean(u.phoneLockEnabled) : true,
+          avatarColor:
+            u.avatarColor ||
+            (role === 'admin' ? '#0284c7' : AVATAR_COLORS[index % AVATAR_COLORS.length] || '#10b981'),
+          createdAt: u.createdAt || new Date().toISOString(),
+          lastLogin: u.lastLogin,
+          isActive: u.isActive !== false,
+          permissions,
+        };
+      });
+
+    if (sanitizedUsers.length === 0) {
+      return {
+        success: false,
+        count: 0,
+        users: this.getUsers(),
+        activeUser: this.getCurrentUser(),
+        userNames: [],
+        operatorNames: [],
+      };
+    }
+
+    // 1. FORZAR VOLCADO TOTAL: Limpiar por completo la tabla local de usuarios (borra Carlos, Lucía y accesos de fábrica)
+    localStorage.removeItem(STORAGE_KEYS.USERS);
+    // Inyectar directamente la lista completa del Administrador
+    localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(sanitizedUsers));
+
+    // 2. DETECTAR EL PERFIL DEL OPERARIO / EMPLEADO (ej. "Tiki")
+    // Buscar si hay un usuario específico cuyo nombre o username sea "tiki"
+    const isTiki = (u: AppUser) => {
+      const uName = cleanStr(u.username);
+      const nName = cleanStr(u.name);
+      return uName === 'tiki' || nName === 'tiki' || nName.includes('tiki') || uName.includes('tiki');
+    };
+    const tikiProfile = sanitizedUsers.find((u) => isTiki(u) && u.isActive) || sanitizedUsers.find(isTiki);
+    // Buscar cualquier otro operador con rol 'user'
+    const anyOperator = sanitizedUsers.find((u) => u.role === 'user' && u.isActive) || sanitizedUsers.find((u) => u.role === 'user');
+    // Buscar primer admin
+    const firstAdmin = sanitizedUsers.find((u) => u.role === 'admin' && u.isActive) || sanitizedUsers.find((u) => u.role === 'admin');
+
+    // En el celular del empleado, el perfil activo predeterminado DEBE ser el operario (Tiki)
+    // para que las restricciones de su rol se apliquen de inmediato
+    const targetActiveUser = tikiProfile || anyOperator || firstAdmin || sanitizedUsers[0];
+
+    // 3. ACTUALIZAR SESIÓN LOCAL INMEDIATAMENTE
+    localStorage.setItem(STORAGE_KEYS.CURRENT_USER, targetActiveUser.id);
+    this.setCurrentUser(targetActiveUser);
+    this.setLocked(false);
+    this.setAuthenticated(true);
+
+    const userNames = sanitizedUsers.map((u) => u.name);
+    const operatorNames = sanitizedUsers.filter((u) => u.role === 'user').map((u) => u.name);
+
+    // 4. DISPARAR EVENTOS GLOBALES DE REFRESCO INMEDIATO
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('users_updated', {
+          detail: {
+            users: sanitizedUsers,
+            switchedToUser: targetActiveUser,
+            total: sanitizedUsers.length,
+            userNames,
+            operatorNames,
+          },
+        })
+      );
+      window.dispatchEvent(
+        new CustomEvent('auth_changed', {
+          detail: { user: targetActiveUser },
+        })
+      );
+    }
+
+    return {
+      success: true,
+      count: sanitizedUsers.length,
+      users: sanitizedUsers,
+      activeUser: targetActiveUser,
+      userNames,
+      operatorNames,
+    };
+  },
+
   mergeIncomingUsers(
     incomingUsers: AppUser[],
-    options?: { isClientDevice?: boolean; incomingIsAdmin?: boolean }
+    _options?: { isClientDevice?: boolean; incomingIsAdmin?: boolean }
   ): {
     added: number;
     updated: number;
@@ -439,143 +629,14 @@ export const AuthService = {
     updatedUserNames: string[];
     switchedToUser?: AppUser;
   } {
-    if (!Array.isArray(incomingUsers) || incomingUsers.length === 0) {
-      return {
-        added: 0,
-        updated: 0,
-        total: this.getUsers().length,
-        addedUserNames: [],
-        updatedUserNames: [],
-      };
-    }
-
-    const currentUsers = this.getUsers();
-    const cleanStr = (s?: string) => (s || '').trim().toLowerCase();
-
-    let addedCount = 0;
-    let updatedCount = 0;
-    const addedNames: string[] = [];
-    const updatedNames: string[] = [];
-    const newlyAddedOperators: AppUser[] = [];
-
-    const mergedList: AppUser[] = [...currentUsers];
-
-    for (const inc of incomingUsers) {
-      if (!inc || !inc.name) continue;
-
-      const incId = cleanStr(inc.id);
-      const incUsername = cleanStr(inc.username);
-      const incName = cleanStr(inc.name);
-
-      // Buscar si el usuario ya existe localmente (por ID, username o nombre)
-      const existingIdx = mergedList.findIndex(
-        (u) =>
-          (incId && cleanStr(u.id) === incId) ||
-          (incUsername && cleanStr(u.username) === incUsername) ||
-          (incName && cleanStr(u.name) === incName)
-      );
-
-      if (existingIdx !== -1) {
-        // Actualizar datos y contraseñas reales del usuario existente
-        const current = mergedList[existingIdx];
-        const updated: AppUser = {
-          ...current,
-          name: inc.name.trim(),
-          username: (inc.username && inc.username.trim().toLowerCase()) || current.username,
-          pin: (inc.pin !== undefined && inc.pin !== null && inc.pin.toString().trim() !== '')
-            ? inc.pin.toString().trim()
-            : current.pin,
-          role: inc.role || current.role,
-          phoneLockEnabled: inc.phoneLockEnabled !== undefined
-            ? Boolean(inc.phoneLockEnabled)
-            : current.phoneLockEnabled,
-          avatarColor: inc.avatarColor || current.avatarColor,
-          isActive: inc.isActive !== undefined ? Boolean(inc.isActive) : current.isActive,
-          permissions: inc.permissions || current.permissions,
-        };
-        mergedList[existingIdx] = updated;
-        updatedCount++;
-        updatedNames.push(updated.name);
-      } else {
-        // Dar de alta automáticamente al nuevo operario o administrador (ej. Tiki)
-        const newUser: AppUser = {
-          id: inc.id || `user-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          name: inc.name.trim(),
-          username:
-            (inc.username && inc.username.trim().toLowerCase().replace(/\s+/g, '')) ||
-            inc.name.trim().toLowerCase().replace(/\s+/g, ''),
-          pin: (inc.pin !== undefined && inc.pin !== null && inc.pin.toString().trim() !== '')
-            ? inc.pin.toString().trim()
-            : '1234',
-          role: inc.role || 'user',
-          phoneLockEnabled: inc.phoneLockEnabled !== undefined
-            ? Boolean(inc.phoneLockEnabled)
-            : true,
-          avatarColor: inc.avatarColor || (inc.role === 'admin' ? '#0284c7' : '#10b981'),
-          createdAt: inc.createdAt || new Date().toISOString(),
-          lastLogin: inc.lastLogin,
-          isActive: inc.isActive !== undefined ? Boolean(inc.isActive) : true,
-          permissions: inc.permissions || [],
-        };
-        mergedList.push(newUser);
-        addedCount++;
-        addedNames.push(newUser.name);
-
-        if (newUser.role === 'user') {
-          newlyAddedOperators.push(newUser);
-        }
-      }
-    }
-
-    this.saveUsers(mergedList);
-
-    // Actualizar usuario activo en la sesión local
-    const currentLoggedIn = this.getCurrentUser();
-    let switchedToUser: AppUser | undefined;
-
-    // Si el usuario actual fue modificado con nuevas credenciales/roles, refrescarlo
-    const refreshedCurrent = mergedList.find((u) => u.id === currentLoggedIn.id);
-    if (refreshedCurrent) {
-      this.setCurrentUser(refreshedCurrent);
-      switchedToUser = refreshedCurrent;
-    }
-
-    // Si estamos en el celular del empleado (o si el usuario actual era el default genérico inicial
-    // y se dio de alta un nuevo operario como Tiki):
-    // Asignar el perfil del nuevo operario para que le aplique su rol 'user' y los menús restringidos
-    // desaparezcan de inmediato.
-    const isDefaultAdmin = currentLoggedIn.id === 'user-admin-1' && currentLoggedIn.pin === '1234';
-    if ((options?.isClientDevice || isDefaultAdmin) && newlyAddedOperators.length > 0) {
-      const targetOperator = newlyAddedOperators[0];
-      this.setCurrentUser(targetOperator);
-      switchedToUser = targetOperator;
-    }
-
-    // Disparar evento para que todos los componentes (App, Header, NavigationMenu, Login)
-    // actualicen inmediatamente la sesión y el perfil visible
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(
-        new CustomEvent('users_updated', {
-          detail: {
-            added: addedCount,
-            updated: updatedCount,
-            total: mergedList.length,
-            addedNames,
-            updatedNames,
-            switchedToUser,
-            users: mergedList,
-          },
-        })
-      );
-    }
-
+    const result = this.forceInjectUsersTable(incomingUsers);
     return {
-      added: addedCount,
-      updated: updatedCount,
-      total: mergedList.length,
-      addedUserNames: addedNames,
-      updatedUserNames: updatedNames,
-      switchedToUser,
+      added: result.count,
+      updated: 0,
+      total: result.count,
+      addedUserNames: result.userNames,
+      updatedUserNames: [],
+      switchedToUser: result.activeUser,
     };
   },
 };

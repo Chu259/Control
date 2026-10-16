@@ -429,7 +429,7 @@ export const SyncView: React.FC<SyncViewProps> = ({
         // Try automatic import
         try {
           const parsed = JSON.parse(cleanText);
-          if (parsed && (parsed.products || parsed.storeCode || parsed.localPendingProducts)) {
+          if (parsed && (parsed.products || parsed.storeCode || parsed.localPendingProducts || parsed.users || parsed.Users || parsed.data)) {
             const res = SyncService.importSyncFile(cleanText);
             if (res.success) {
               Sound.playSuccessChime();
@@ -1740,7 +1740,7 @@ export const SyncView: React.FC<SyncViewProps> = ({
                           // Auto-validate and import if complete
                           try {
                             const parsed = JSON.parse(pasted);
-                            if (parsed && (parsed.products || parsed.storeCode || parsed.localPendingProducts)) {
+                            if (parsed && (parsed.products || parsed.storeCode || parsed.localPendingProducts || parsed.users || parsed.Users || parsed.data)) {
                               const res = SyncService.importSyncFile(pasted);
                               if (res.success) {
                                 Sound.playSuccessChime();

@@ -151,16 +151,21 @@ export default function App() {
 
   useEffect(() => {
     const handleUsersUpdated = (e: any) => {
-      const targetUser = e?.detail?.switchedToUser || AuthService.getCurrentUser();
+      const targetUser = e?.detail?.switchedToUser || e?.detail?.user || AuthService.getCurrentUser();
       if (targetUser) {
         setCurrentUser(targetUser);
+        if (targetUser.role === 'user' && ['movements', 'reports', 'settings', 'users'].includes(currentTab)) {
+          setCurrentTab('inventory');
+        }
       }
     };
     window.addEventListener('users_updated', handleUsersUpdated);
+    window.addEventListener('auth_changed', handleUsersUpdated);
     return () => {
       window.removeEventListener('users_updated', handleUsersUpdated);
+      window.removeEventListener('auth_changed', handleUsersUpdated);
     };
-  }, []);
+  }, [currentTab]);
 
   const [shoppingCount, setShoppingCount] = useState<number>(() => ShoppingService.getShoppingList().length);
 

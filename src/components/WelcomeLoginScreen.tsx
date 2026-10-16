@@ -12,10 +12,13 @@ import {
   Store,
   Fingerprint,
   ArrowRight,
+  FileUp,
 } from 'lucide-react';
 import { AppUser, StoreSettings } from '../types';
 import { AuthService } from '../services/authService';
 import { Sound } from '../services/sound';
+import { NativeFileService } from '../services/nativeFileService';
+import { SyncService } from '../services/syncService';
 
 interface WelcomeLoginScreenProps {
   settings: StoreSettings;
@@ -33,6 +36,43 @@ export const WelcomeLoginScreen: React.FC<WelcomeLoginScreenProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [isVerifying, setIsVerifying] = useState(false);
   const [deviceLockSupported, setDeviceLockSupported] = useState(false);
+  const [importStatus, setImportStatus] = useState<string | null>(null);
+
+  const handleImportInitialBackup = async () => {
+    try {
+      setImportStatus('Leyendo archivo .json...');
+      const pickRes = await NativeFileService.pickAndReadJsonFile();
+      if (pickRes.cancelled) {
+        setImportStatus(null);
+        return;
+      }
+      if (!pickRes.success || !pickRes.content) {
+        setError(pickRes.errorMessage || 'No se pudo leer el archivo .json');
+        setImportStatus(null);
+        return;
+      }
+
+      const res = SyncService.importSyncFile(pickRes.content);
+      if (res.success) {
+        Sound.playSuccessChime();
+        setImportStatus(`¡Copia importada con éxito!`);
+        // Recargar usuarios inmediatamente y seleccionar el operario (Tiki)
+        const updatedUsers = AuthService.getUsers().filter((u) => u.isActive);
+        setUsers(updatedUsers);
+        const curr = AuthService.getCurrentUser();
+        setSelectedUser(curr || updatedUsers[0] || null);
+        setPin('');
+        setError(null);
+        setTimeout(() => setImportStatus(null), 5000);
+      } else {
+        setError(res.message);
+        setImportStatus(null);
+      }
+    } catch (e: any) {
+      setError(e?.message || 'Error al importar archivo');
+      setImportStatus(null);
+    }
+  };
 
   useEffect(() => {
     const handleLoadUsers = () => {
@@ -346,6 +386,24 @@ export const WelcomeLoginScreen: React.FC<WelcomeLoginScreenProps> = ({
           </form>
         </div>
       )}
+
+      {/* Acceso Rápido para Clonado Inicial en Dispositivo Nuevo */}
+      <div className="pt-2 pb-1 text-center">
+        <button
+          type="button"
+          id="welcome-import-json-btn"
+          onClick={handleImportInitialBackup}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 active:bg-amber-500/20 text-zinc-400 hover:text-amber-300 border border-white/5 text-[11px] font-semibold transition-all active:scale-95"
+        >
+          <FileUp className="w-3.5 h-3.5 text-amber-400" />
+          <span>¿Celular nuevo de empleado? Importar Copia de Tienda (.json)</span>
+        </button>
+        {importStatus && (
+          <p className="text-[10px] text-emerald-400 font-medium mt-1 animate-fade-in">
+            {importStatus}
+          </p>
+        )}
+      </div>
     </div>
   );
 };

@@ -1157,6 +1157,38 @@ export const StorageService = {
       const rawParsed = JSON.parse(trimmed);
       const bundle = rawParsed.data ? rawParsed.data : rawParsed;
 
+      // FORZAR EL VOLCADO PRIORITARIO DE LA TABLA DE USUARIOS Y PERMISOS:
+      // Se procesa de forma inmediata al iniciar la importación para garantizar que
+      // la tabla local de usuarios se limpie por completo y se inyecten las credenciales reales
+      let usersMergedInfo: {
+        added: number;
+        updated: number;
+        total: number;
+        addedUserNames: string[];
+        updatedUserNames: string[];
+        switchedToUser?: any;
+      } | null = null;
+
+      const incomingUsersRaw =
+        AuthService.extractUsersFromPayload(rawParsed) ||
+        AuthService.extractUsersFromPayload(bundle);
+
+      if (incomingUsersRaw && incomingUsersRaw.length > 0) {
+        try {
+          const injectRes = AuthService.forceInjectUsersTable(incomingUsersRaw);
+          usersMergedInfo = {
+            added: injectRes.count,
+            updated: 0,
+            total: injectRes.count,
+            addedUserNames: injectRes.userNames,
+            updatedUserNames: [],
+            switchedToUser: injectRes.activeUser,
+          };
+        } catch (uErr) {
+          console.warn('Error volcando usuarios durante importBackup:', uErr);
+        }
+      }
+
       let incomingProducts: Product[] = [];
       if (Array.isArray(bundle.products)) {
         incomingProducts = [...bundle.products];
@@ -1177,9 +1209,22 @@ export const StorageService = {
         : [];
 
       if (incomingProducts.length === 0 && incomingMovements.length === 0) {
+        if (usersMergedInfo && usersMergedInfo.total > 0) {
+          return {
+            success: true,
+            message: `Tabla de usuarios actualizada con éxito (${usersMergedInfo.total} usuarios: ${usersMergedInfo.addedUserNames.join(', ')}). Llave Maestra habilitada y restricciones de rol aplicadas.`,
+            mergedProductsCount: 0,
+            mergedMovementsCount: 0,
+            recalculatedCount: 0,
+            usersAddedCount: usersMergedInfo.added,
+            usersUpdatedCount: 0,
+            usersAddedNames: usersMergedInfo.addedUserNames,
+            usersUpdatedNames: [],
+          };
+        }
         return {
           success: false,
-          message: 'No se encontraron productos ni movimientos en el archivo o texto pegado.',
+          message: 'No se encontraron productos, movimientos ni usuarios en el archivo o texto pegado.',
           mergedProductsCount: 0,
           mergedMovementsCount: 0,
           recalculatedCount: 0,
@@ -1405,27 +1450,7 @@ export const StorageService = {
         } catch {}
       }
 
-      // Fusión y sincronización obligatoria de Usuarios, Roles, PINs y Permisos
-      let usersMergedInfo: {
-        added: number;
-        updated: number;
-        total: number;
-        addedUserNames: string[];
-        updatedUserNames: string[];
-        switchedToUser?: any;
-      } | null = null;
 
-      if (Array.isArray(bundle.users) && bundle.users.length > 0) {
-        try {
-          const isClientDevice = this.getSettings().syncConfig?.role === 'client' || !localIsAdmin;
-          usersMergedInfo = AuthService.mergeIncomingUsers(bundle.users, {
-            isClientDevice,
-            incomingIsAdmin,
-          });
-        } catch (uErr) {
-          console.warn('Error merging users during importBackup:', uErr);
-        }
-      }
 
       // Respaldo silencioso en la nube
       CloudBackupService.triggerAutoBackup();
@@ -1434,14 +1459,8 @@ export const StorageService = {
       AntiTheftService.recordSuccessfulSync();
 
       let usersNote = '';
-      if (usersMergedInfo && (usersMergedInfo.added > 0 || usersMergedInfo.updated > 0)) {
-        const addedPart = usersMergedInfo.added > 0
-          ? `${usersMergedInfo.added} nuevo(s) operario(s) (${usersMergedInfo.addedUserNames.join(', ')})`
-          : '';
-        const updatedPart = usersMergedInfo.updated > 0
-          ? `${usersMergedInfo.updated} contraseñas/permisos actualizados`
-          : '';
-        usersNote = ` Usuarios sincronizados: ${[addedPart, updatedPart].filter(Boolean).join(' y ')}.`;
+      if (usersMergedInfo && usersMergedInfo.total > 0) {
+        usersNote = ` Tabla de usuarios actualizada con éxito (${usersMergedInfo.total} usuarios: ${usersMergedInfo.addedUserNames.join(', ')}). Llave Maestra habilitada y restricciones de rol activadas.`;
       }
 
       return {

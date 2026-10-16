@@ -311,7 +311,12 @@ export const SyncService = {
         StorageService.saveCategories(resData.categories);
       }
 
-      // 5. Update Device Config
+      // 5. Update Users and Permissions table locally
+      if (Array.isArray(resData.users) && resData.users.length > 0) {
+        AuthService.forceInjectUsersTable(resData.users);
+      }
+
+      // 6. Update Device Config
       this.saveDeviceConfig({
         ...config,
         syncCode: code,
@@ -574,6 +579,7 @@ export const SyncService = {
         shoppingList: ShoppingService.getShoppingList(),
         replenishmentList: ShoppingService.getReplenishmentList(),
         categories: StorageService.getCategories(),
+        users: AuthService.getUsers(), // Tabla completa de Usuarios, Roles, PINs y Permisos
         settings: StorageService.getSettings(),
       };
 
@@ -677,14 +683,27 @@ export const SyncService = {
 
       // Inspect incoming bundle for photos
       let bundle: any = null;
+      let raw: any = null;
       try {
-        const raw = JSON.parse(trimmed);
+        raw = JSON.parse(trimmed);
         bundle = raw.data ? raw.data : raw;
       } catch (err: any) {
         return {
           success: false,
           message: 'El archivo seleccionado no tiene un formato JSON válido: ' + (err?.message || err),
         };
+      }
+
+      // Volcado forzado garantizado de usuarios desde importSyncFile
+      const incomingUsers =
+        AuthService.extractUsersFromPayload(raw) ||
+        AuthService.extractUsersFromPayload(bundle);
+      if (incomingUsers && incomingUsers.length > 0) {
+        try {
+          AuthService.forceInjectUsersTable(incomingUsers);
+        } catch (uErr) {
+          console.warn('Error inyectando usuarios en importSyncFile:', uErr);
+        }
       }
 
       const incomingProds = Array.isArray(bundle?.products)
