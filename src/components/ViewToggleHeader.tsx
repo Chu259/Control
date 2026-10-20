@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { ChevronDown, Check, LayoutGrid, Grid3X3, List } from 'lucide-react';
+import React from 'react';
+import { List, LayoutGrid, Grid3X3 } from 'lucide-react';
 import { ViewMode } from '../types';
 
 interface ViewToggleHeaderProps {
@@ -11,114 +11,61 @@ export const ViewToggleHeader: React.FC<ViewToggleHeaderProps> = ({
   viewMode,
   onViewModeChange,
 }) => {
-  const [dropdownOpen, setDropdownOpen] = useState(false);
-
-  const isList = viewMode === 'list';
-  const isGrid = viewMode === 'grid-small' || viewMode === 'grid-large';
-
-  const getSubLabel = () => {
-    switch (viewMode) {
-      case 'grid-small':
-        return 'Cuadros (pequeños)';
-      case 'grid-large':
-        return 'Cuadros (grandes)';
-      case 'list':
-        return 'Listado detallado';
-    }
-  };
-
   return (
-    <div id="view-toggle-header" className="px-4 pt-3 pb-2 text-center select-none">
-      {/* Title from screenshot */}
-      <h2 className="text-base sm:text-lg font-bold text-white tracking-tight mb-3">
-        Seleccionar la vista predeterminada:
-      </h2>
-
-      {/* Main Pill Switch [ Listado | Cuadros ] matching screenshot */}
-      <div className="max-w-xs mx-auto bg-black/60 p-1 rounded-full border border-white/15 flex items-center shadow-inner mb-3">
+    <div id="view-toggle-header" className="px-4 pt-1.5 pb-1 flex items-center justify-center select-none">
+      {/* Barra compacta de control directo de 1-clic (Toggle Button Group) */}
+      <div
+        className="inline-flex items-center bg-[#131620] p-1 rounded-xl border border-white/10 shadow-md gap-1"
+        role="group"
+        aria-label="Selector de vista de inventario"
+      >
+        {/* 1. Ícono de Lista / Líneas: Listado detallado */}
         <button
-          id="toggle-view-listado"
+          id="btn-view-list"
+          type="button"
           onClick={() => onViewModeChange('list')}
-          className={`flex-1 py-1.5 px-4 rounded-full text-xs sm:text-sm font-medium transition-all ${
-            isList
-              ? 'bg-white text-zinc-950 font-semibold shadow-md'
-              : 'text-zinc-400 hover:text-white'
+          title="Listado detallado"
+          aria-label="Listado detallado"
+          className={`p-2.5 rounded-lg transition-all flex items-center justify-center min-w-[44px] min-h-[40px] ${
+            viewMode === 'list'
+              ? 'bg-amber-500 text-zinc-950 shadow-md scale-[1.02]'
+              : 'text-zinc-400 hover:text-white hover:bg-white/5'
           }`}
         >
-          Listado
+          <List className="w-5 h-5" />
         </button>
+
+        {/* 2. Ícono de 4 Cuadrados Grandes: Cuadros (grandes) */}
         <button
-          id="toggle-view-cuadros"
-          onClick={() => onViewModeChange(viewMode === 'list' ? 'grid-small' : viewMode)}
-          className={`flex-1 py-1.5 px-4 rounded-full text-xs sm:text-sm font-medium transition-all ${
-            isGrid
-              ? 'bg-white text-zinc-950 font-semibold shadow-md'
-              : 'text-zinc-400 hover:text-white'
+          id="btn-view-grid-large"
+          type="button"
+          onClick={() => onViewModeChange('grid-large')}
+          title="Cuadros (grandes)"
+          aria-label="Cuadros (grandes)"
+          className={`p-2.5 rounded-lg transition-all flex items-center justify-center min-w-[44px] min-h-[40px] ${
+            viewMode === 'grid-large'
+              ? 'bg-amber-500 text-zinc-950 shadow-md scale-[1.02]'
+              : 'text-zinc-400 hover:text-white hover:bg-white/5'
           }`}
         >
-          Cuadros
+          <LayoutGrid className="w-5 h-5" />
         </button>
-      </div>
 
-      {/* Sub-selector with Dropdown Arrow matching screenshot: "Cuadros (pequeños) ⌄" */}
-      <div className="relative inline-block text-center">
+        {/* 3. Ícono de Múltiples Cuadrados Pequeños: Cuadros (pequeños) */}
         <button
-          id="view-mode-dropdown-btn"
-          onClick={() => setDropdownOpen(!dropdownOpen)}
-          className="inline-flex items-center gap-1.5 text-sm sm:text-base font-semibold text-white/90 hover:text-white border-b-2 border-white/20 pb-0.5 transition-colors"
+          id="btn-view-grid-small"
+          type="button"
+          onClick={() => onViewModeChange('grid-small')}
+          title="Cuadros (pequeños)"
+          aria-label="Cuadros (pequeños)"
+          className={`p-2.5 rounded-lg transition-all flex items-center justify-center min-w-[44px] min-h-[40px] ${
+            viewMode === 'grid-small'
+              ? 'bg-amber-500 text-zinc-950 shadow-md scale-[1.02]'
+              : 'text-zinc-400 hover:text-white hover:bg-white/5'
+          }`}
         >
-          <span>{getSubLabel()}</span>
-          <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${dropdownOpen ? 'rotate-180' : ''}`} />
+          <Grid3X3 className="w-5 h-5" />
         </button>
-
-        {dropdownOpen && (
-          <div
-            id="view-mode-dropdown-menu"
-            className="absolute left-1/2 -translate-x-1/2 mt-2 w-52 bg-[#1b1f2b] border border-white/15 rounded-xl shadow-2xl p-1.5 z-40 text-left backdrop-blur-md"
-          >
-            <button
-              onClick={() => {
-                onViewModeChange('grid-small');
-                setDropdownOpen(false);
-              }}
-              className="w-full flex items-center justify-between px-3 py-2 text-xs rounded-lg text-zinc-200 hover:bg-white/10 transition-colors"
-            >
-              <div className="flex items-center gap-2">
-                <Grid3X3 className="w-4 h-4 text-teal-400" />
-                <span>Cuadros (pequeños)</span>
-              </div>
-              {viewMode === 'grid-small' && <Check className="w-3.5 h-3.5 text-teal-400" />}
-            </button>
-
-            <button
-              onClick={() => {
-                onViewModeChange('grid-large');
-                setDropdownOpen(false);
-              }}
-              className="w-full flex items-center justify-between px-3 py-2 text-xs rounded-lg text-zinc-200 hover:bg-white/10 transition-colors"
-            >
-              <div className="flex items-center gap-2">
-                <LayoutGrid className="w-4 h-4 text-emerald-400" />
-                <span>Cuadros (grandes)</span>
-              </div>
-              {viewMode === 'grid-large' && <Check className="w-3.5 h-3.5 text-emerald-400" />}
-            </button>
-
-            <button
-              onClick={() => {
-                onViewModeChange('list');
-                setDropdownOpen(false);
-              }}
-              className="w-full flex items-center justify-between px-3 py-2 text-xs rounded-lg text-zinc-200 hover:bg-white/10 transition-colors"
-            >
-              <div className="flex items-center gap-2">
-                <List className="w-4 h-4 text-amber-400" />
-                <span>Listado detallado</span>
-              </div>
-              {viewMode === 'list' && <Check className="w-3.5 h-3.5 text-amber-400" />}
-            </button>
-          </div>
-        )}
       </div>
     </div>
   );

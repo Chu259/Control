@@ -188,14 +188,41 @@ export const StorageService = {
   },
 
   markProductReviewed(productId: string): Product[] {
+    this.removeLocalPendingProduct(productId);
+    const now = new Date().toISOString();
     const products = this.getProducts().map((p) => {
-      if (p.id === productId) {
+      if (p.id === productId || p.barcodeUnit === productId || p.barcode === productId) {
         return {
           ...p,
           isNewFromUser: false,
           reviewedByAdmin: true,
-          lastUpdated: new Date().toISOString(),
+          lastUpdated: now,
         };
+      }
+      return p;
+    });
+    this.saveProducts(products);
+    return products;
+  },
+
+  markAllProductsReviewed(productIds?: string[]): Product[] {
+    const idSet = productIds && productIds.length > 0 ? new Set(productIds) : null;
+    const now = new Date().toISOString();
+    if (idSet) {
+      idSet.forEach((id) => this.removeLocalPendingProduct(id));
+    } else {
+      this.clearLocalPendingProducts();
+    }
+    const products = this.getProducts().map((p) => {
+      if (!idSet || idSet.has(p.id) || (p.barcodeUnit && idSet.has(p.barcodeUnit)) || (p.barcode && idSet.has(p.barcode))) {
+        if (p.isNewFromUser || !p.reviewedByAdmin) {
+          return {
+            ...p,
+            isNewFromUser: false,
+            reviewedByAdmin: true,
+            lastUpdated: now,
+          };
+        }
       }
       return p;
     });

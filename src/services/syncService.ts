@@ -401,14 +401,18 @@ export const SyncService = {
     const code = config.syncCode.trim().toUpperCase();
     const baseUrl = this.getServerBaseUrl();
 
-    // Mark locally
+    // Mark locally immediately
     StorageService.markProductReviewed(productId);
 
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2000);
       const response = await fetch(`${baseUrl}/api/sync/store/${encodeURIComponent(code)}/approve-product/${encodeURIComponent(productId)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
       const parsed = await this.parseSafeResponse(response);
       return {
         success: parsed.ok,
@@ -416,6 +420,43 @@ export const SyncService = {
       };
     } catch {
       return { success: true, message: 'Producto aprobado localmente.' };
+    }
+  },
+
+  // Admin approves all pending new user-added products in one go
+  async approveAllProducts(productIds?: string[]): Promise<{ success: boolean; count: number; message: string }> {
+    const config = this.getDeviceConfig();
+    const code = config.syncCode.trim().toUpperCase();
+    const baseUrl = this.getServerBaseUrl();
+
+    // 1. Mark ALL products locally in one shot (integrates immediately into master catalog)
+    StorageService.markAllProductsReviewed(productIds);
+    const count = productIds?.length || 0;
+
+    // 2. Notify server with safe timeout (if online / reachable)
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2500);
+      const response = await fetch(`${baseUrl}/api/sync/store/${encodeURIComponent(code)}/approve-all-products`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ productIds }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      const parsed = await this.parseSafeResponse(response);
+      return {
+        success: true,
+        count,
+        message: parsed.data?.message || `Se aprobaron e integraron ${count} productos al catálogo maestro.`,
+      };
+    } catch {
+      // 100% Offline / Hotspot support: Local operation is authoritative
+      return {
+        success: true,
+        count,
+        message: `Se procesaron y aprobaron ${count} productos al catálogo maestro localmente.`,
+      };
     }
   },
 

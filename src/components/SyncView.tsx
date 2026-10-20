@@ -60,6 +60,7 @@ export const SyncView: React.FC<SyncViewProps> = ({
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
   const [syncing, setSyncing] = useState(false);
   const [approvingId, setApprovingId] = useState<string | null>(null);
+  const [isApprovingAll, setIsApprovingAll] = useState(false);
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [message, setMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
   const [copiedCode, setCopiedCode] = useState(false);
@@ -682,17 +683,55 @@ export const SyncView: React.FC<SyncViewProps> = ({
     });
   };
 
-  // Approve all pending user products
+  // Approve all pending user products in one go integrating them into master catalog
   const handleApproveAllProducts = async () => {
-    for (const p of newProductsFromUsers) {
-      await SyncService.approveProduct(p.id);
+    // Collect all pending products from state, storage, and local pending list
+    const storedPending = StorageService.getProducts().filter((p) => p.isNewFromUser && !p.reviewedByAdmin);
+    const localPending = StorageService.getLocalPendingProducts().filter((p) => p.isNewFromUser && !p.reviewedByAdmin);
+
+    const map = new Map<string, Product>();
+    newProductsFromUsers.forEach((p) => map.set(p.id, p));
+    storedPending.forEach((p) => map.set(p.id, p));
+    localPending.forEach((p) => map.set(p.id, p));
+
+    const targetProducts = Array.from(map.values());
+    if (targetProducts.length === 0) return;
+
+    setIsApprovingAll(true);
+    const count = targetProducts.length;
+
+    try {
+      // 1. Ejecutar de forma automática un bucle que procese y autorice de forma masiva los artículos pendientes en un solo toque
+      const productIds = targetProducts.map((p) => p.id);
+
+      // Bucle que recorre cada entrada e integra los artículos nuevos creados por el personal (como Lucía) directamente al catálogo maestro
+      for (const p of targetProducts) {
+        StorageService.markProductReviewed(p.id);
+      }
+      StorageService.markAllProductsReviewed(productIds);
+
+      // 2. Notificación al servicio de sincronización / P2P en segundo plano sin trabar la interfaz
+      try {
+        await SyncService.approveAllProducts(productIds);
+      } catch (e) {
+        console.warn('SyncService approveAllProducts finalizado localmente:', e);
+      }
+
+      Sound.playSuccessChime();
+      onRefreshData();
+      setMessage({
+        type: 'success',
+        text: `✔ ✔ Se autorizaron e integraron exitosamente los ${count} artículos nuevos creados por el personal (como Lucía) directamente al catálogo maestro.`,
+      });
+    } catch (err: any) {
+      console.error('Error al aprobar todos los productos:', err);
+      setMessage({
+        type: 'error',
+        text: err?.message || 'Error al aprobar productos. Inténtalo nuevamente.',
+      });
+    } finally {
+      setIsApprovingAll(false);
     }
-    Sound.playSuccessChime();
-    onRefreshData();
-    setMessage({
-      type: 'success',
-      text: `Se aprobaron los ${newProductsFromUsers.length} productos nuevos agregados por los usuarios.`,
-    });
   };
 
   const formatLastSync = (timestamp?: string) => {
@@ -810,10 +849,21 @@ export const SyncView: React.FC<SyncViewProps> = ({
                 id="approve-all-user-products-btn"
                 type="button"
                 onClick={handleApproveAllProducts}
-                className="px-3 py-1.5 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold text-xs rounded-xl transition-all shadow-md active:scale-95 flex items-center gap-1.5"
+                disabled={isApprovingAll}
+                className="px-3.5 py-1.5 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl transition-all shadow-md active:scale-95 flex items-center gap-1.5 cursor-pointer"
+                title="Aprobar de un solo golpe e integrar todos los productos nuevos creados por el personal al catálogo maestro"
               >
-                <Check className="w-3.5 h-3.5" />
-                <span>✓ Aprobar Todos</span>
+                {isApprovingAll ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Aprobando {newProductsFromUsers.length}...</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCheck className="w-4 h-4 text-emerald-100" />
+                    <span>✔ ✔ Aprobar Todos</span>
+                  </>
+                )}
               </button>
             </div>
           </div>
@@ -880,7 +930,7 @@ export const SyncView: React.FC<SyncViewProps> = ({
                       id={`reject-prod-${prod.id}`}
                       type="button"
                       onClick={() => handleRejectProduct(prod.id, prod.name)}
-                      disabled={rejectingId === prod.id || approvingId === prod.id}
+                      disabled={rejectingId === prod.id || approvingId === prod.id || isApprovingAll}
                       className="w-9 h-9 bg-rose-600 hover:bg-rose-500 active:scale-95 text-white rounded-lg shadow-sm border border-rose-500 transition-all disabled:opacity-50 flex items-center justify-center flex-shrink-0"
                       title="Rechazar y eliminar definitivamente de la lista"
                       aria-label="Rechazar y eliminar"
@@ -897,7 +947,7 @@ export const SyncView: React.FC<SyncViewProps> = ({
                       id={`approve-prod-${prod.id}`}
                       type="button"
                       onClick={() => handleApproveProduct(prod.id)}
-                      disabled={approvingId === prod.id || rejectingId === prod.id}
+                      disabled={approvingId === prod.id || rejectingId === prod.id || isApprovingAll}
                       className="h-9 px-3.5 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold text-xs rounded-lg shadow-sm border border-emerald-400/30 transition-all disabled:opacity-50 flex items-center gap-1.5 active:scale-95"
                       title="Aprobar e incorporar al catálogo maestro"
                     >

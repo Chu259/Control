@@ -384,8 +384,8 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <h4 className="text-sm font-bold text-white truncate">{product.name}</h4>
-                      <span className="px-2 py-0.5 rounded text-[9.5px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                        {bulkUnitName} ({unitsPerBulk} uds/cj)
+                      <span className="px-1.5 py-0.5 rounded text-[9.5px] font-mono font-bold uppercase bg-teal-500/15 text-teal-300 border border-teal-500/30 shrink-0">
+                        {product.category?.trim().toUpperCase().replace(/\s+/g, '-') || 'PASILLO-1'}
                       </span>
                       {alertStatus.isLow && (
                         <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-rose-500/20 text-rose-400 border border-rose-500/30">
@@ -415,14 +415,18 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
                       </div>
                     </div>
 
-                    {/* Current stock status & Digital Quantity to buy */}
-                    <div className="flex items-center gap-3 text-xs text-zinc-400 mt-1.5 flex-wrap">
+                    {/* Current stock status */}
+                    <div className="flex items-center gap-2 text-xs text-zinc-400 mt-1.5 flex-wrap">
                       <span>
                         Stock en tienda: <strong className="text-white">{product.stock} {product.unit || 'uds'}</strong>
                       </span>
                       <span>•</span>
                       <span>
                         Bultos: <strong className="text-amber-300">{Math.floor(product.stock / unitsPerBulk)}</strong>
+                      </span>
+                      <span>•</span>
+                      <span className="px-2 py-0.5 rounded text-[9.5px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                        {bulkUnitName} ({unitsPerBulk} uds/cj)
                       </span>
                     </div>
 

@@ -766,7 +766,7 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
 
                   {/* Right Column: Title & Details */}
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-start justify-between gap-1">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <h4
                         className={`text-sm font-bold truncate ${
                           isCompleted ? 'line-through text-zinc-400' : 'text-white'
@@ -774,11 +774,9 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
                       >
                         {product.name}
                       </h4>
-                      {suggestedGondola > 0 && (
-                        <span className="text-[9.5px] font-mono font-semibold px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30 flex-shrink-0">
-                          Sugerido: {suggestedGondola} uds
-                        </span>
-                      )}
+                      <span className="px-1.5 py-0.5 rounded text-[9.5px] font-mono font-bold uppercase bg-teal-500/15 text-teal-300 border border-teal-500/30 shrink-0">
+                        {product.category?.trim().toUpperCase().replace(/\s+/g, '-') || 'PASILLO-1'}
+                      </span>
                     </div>
 
                     {/* Badges */}
@@ -817,7 +815,7 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
                       </div>
                     )}
 
-                    {/* Physical stock stats */}
+                    {/* Physical stock stats & Sugerido */}
                     <div className="flex items-center gap-2 text-xs text-zinc-400 mt-1.5 flex-wrap">
                       <span>
                         En depósito: <strong className="text-amber-300">{Math.floor(product.stock / unitsPerBulk)} cj</strong>
@@ -830,6 +828,15 @@ export const ReplenishmentView: React.FC<ReplenishmentViewProps> = ({
                       <span className="text-zinc-500">
                         Total: {product.stock} {product.unit || 'uds'}
                       </span>
+                      {suggestedGondola > 0 && (
+                        <>
+                          <span>•</span>
+                          <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30 flex items-center gap-1 shadow-sm">
+                            <span>Sugerido:</span>
+                            <strong className="text-amber-200">{suggestedGondola} uds</strong>
+                          </span>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>

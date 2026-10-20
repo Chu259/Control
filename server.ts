@@ -531,6 +531,50 @@ async function startServer() {
     });
   });
 
+  // POST approve all pending products in bulk (Admin approval)
+  app.post('/api/sync/store/:storeCode/approve-all-products', (req, res) => {
+    const code = req.params.storeCode.toUpperCase();
+    const productIds: string[] | undefined = req.body?.productIds;
+    const store = getOrCreateStore(code);
+    const now = new Date().toISOString();
+    const idSet = Array.isArray(productIds) && productIds.length > 0 ? new Set(productIds) : null;
+
+    let approvedCount = 0;
+    store.products = (store.products || []).map((p) => {
+      if (!idSet || idSet.has(p.id)) {
+        if (p.isNewFromUser || !p.reviewedByAdmin) {
+          approvedCount++;
+          return {
+            ...p,
+            isNewFromUser: false,
+            reviewedByAdmin: true,
+            lastUpdated: now,
+          };
+        }
+      }
+      return p;
+    });
+
+    if (idSet) {
+      store.newProductsAlerts = (store.newProductsAlerts || []).filter((id) => !idSet.has(id));
+    } else {
+      store.newProductsAlerts = [];
+    }
+
+    store.version = (store.version || 1) + 1;
+    store.lastUpdated = now;
+
+    syncStoreMap.set(code, store);
+    savePersistedSync(code, store);
+
+    res.json({
+      success: true,
+      approvedCount,
+      message: `Se procesaron y aprobaron ${approvedCount} productos en el catálogo maestro.`,
+      newProductsAlerts: store.newProductsAlerts,
+    });
+  });
+
   // POST reject/delete product (Admin rejection from pending review)
   app.post('/api/sync/store/:storeCode/reject-product/:productId', (req, res) => {
     const code = req.params.storeCode.toUpperCase();
