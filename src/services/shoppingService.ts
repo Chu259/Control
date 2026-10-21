@@ -1,5 +1,6 @@
 import { Product, ShoppingListItem, ReplenishmentItem } from '../types';
 import { CloudBackupService } from './cloudBackupService';
+import { jsPDF } from 'jspdf';
 
 const SHOPPING_STORAGE_KEY = 'inventario_shopping_list_v1';
 const REPLENISHMENT_STORAGE_KEY = 'inventario_replenishment_list_v1';
@@ -643,35 +644,74 @@ export const ShoppingService = {
       ctx.font = '13px "Segoe UI", Roboto, sans-serif';
       ctx.fillText(`(${currentBulks} bultos cerrados)`, 810, currentY + 80);
 
-      // Col 5: RECUADRO VACÍO PARA ANOTAR MANUALMENTE LAS CANTIDADES A COMPRAR
+      // Col 5: RECUADRO INTERACTIVO / IMPRESO PARA CANTIDADES A COMPRAR
       const boxX = 940;
       const boxY = currentY + 12;
       const boxW = 210;
       const boxH = 80;
 
-      // Outer blank box
+      // Outer box
       ctx.fillStyle = '#FFFFFF';
       ctx.fillRect(boxX, boxY, boxW, boxH);
       ctx.strokeStyle = '#0284C7';
       ctx.lineWidth = 2;
       ctx.strokeRect(boxX, boxY, boxW, boxH);
 
-      // Blank line header
+      // Line header
       ctx.fillStyle = '#0369A1';
       ctx.font = 'bold 11px "Segoe UI", Roboto, sans-serif';
       ctx.fillText('CANTIDAD A PEDIR:', boxX + 12, boxY + 18);
 
-      // Blank handwriting boxes (COMPLETAMENTE VACÍOS PARA ANOTAR A MANO)
-      ctx.strokeStyle = '#94A3B8';
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([4, 3]);
-      // Cuadro vacío para Bultos
-      ctx.strokeRect(boxX + 14, boxY + 24, 68, 34);
-      // Cuadro vacío para Unidades
-      ctx.strokeRect(boxX + 98, boxY + 24, 68, 34);
-      ctx.setLineDash([]); // Reset dash
+      const hasBulksVal = typeof item.bulksToBuy === 'number' && !isNaN(item.bulksToBuy);
+      const hasUnitsVal = typeof item.unitsToBuy === 'number' && !isNaN(item.unitsToBuy);
 
-      // Las palabras BULTOS y UNIDADES debajo del cuadro vacío
+      // Cuadro Bultos
+      if (hasBulksVal) {
+        ctx.fillStyle = '#F0F9FF';
+        ctx.fillRect(boxX + 14, boxY + 24, 68, 34);
+        ctx.strokeStyle = '#0284C7';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(boxX + 14, boxY + 24, 68, 34);
+
+        ctx.fillStyle = '#0369A1';
+        ctx.font = 'bold 20px "Segoe UI", Roboto, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(String(item.bulksToBuy), boxX + 14 + 34, boxY + 49);
+      } else {
+        // Recuadro azul punteado totalmente limpio, transparente y en blanco sin textos
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(boxX + 14, boxY + 24, 68, 34);
+        ctx.strokeStyle = '#0284C7';
+        ctx.lineWidth = 1.8;
+        ctx.setLineDash([4, 3]);
+        ctx.strokeRect(boxX + 14, boxY + 24, 68, 34);
+        ctx.setLineDash([]);
+      }
+
+      // Cuadro Unidades
+      if (hasUnitsVal) {
+        ctx.fillStyle = '#F0F9FF';
+        ctx.fillRect(boxX + 98, boxY + 24, 68, 34);
+        ctx.strokeStyle = '#0284C7';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(boxX + 98, boxY + 24, 68, 34);
+
+        ctx.fillStyle = '#0369A1';
+        ctx.font = 'bold 20px "Segoe UI", Roboto, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(String(item.unitsToBuy), boxX + 98 + 34, boxY + 49);
+      } else {
+        // Recuadro azul punteado totalmente limpio, transparente y en blanco sin textos
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(boxX + 98, boxY + 24, 68, 34);
+        ctx.strokeStyle = '#0284C7';
+        ctx.lineWidth = 1.8;
+        ctx.setLineDash([4, 3]);
+        ctx.strokeRect(boxX + 98, boxY + 24, 68, 34);
+        ctx.setLineDash([]);
+      }
+
+      // Las palabras BULTOS y UNIDADES debajo del cuadro
       ctx.fillStyle = '#334155';
       ctx.font = 'bold 10px "Segoe UI", Roboto, sans-serif';
       ctx.textAlign = 'center';
@@ -706,6 +746,432 @@ export const ShoppingService = {
     return jpgDataUrl;
   },
 
+  /**
+   * Generates a crisp, multi-page vector A4 PDF using jsPDF for crystal clear printing
+   * and sharing via WhatsApp, Gmail, or print services without quality loss.
+   */
+  async exportShoppingListToPDF(
+    products: Product[],
+    items: ShoppingListItem[],
+    storeName: string
+  ): Promise<string> {
+    const matchedProducts = items
+      .map((item) => {
+        const prod = products.find((p) => p.id === item.productId);
+        return prod ? { product: prod, item } : null;
+      })
+      .filter((x): x is { product: Product; item: ShoppingListItem } => x !== null);
+
+    if (matchedProducts.length === 0) {
+      throw new Error('La lista de compras no tiene productos seleccionados.');
+    }
+
+    // A4 dimensions in mm: 210 x 297
+    const doc = new jsPDF({
+      orientation: 'portrait',
+      unit: 'mm',
+      format: 'a4',
+    });
+
+    const marginX = 10;
+    const contentWidth = 190; // 210 - 20
+
+    // Preload product images safely converted to data URLs for jsPDF
+    const loadedImageDataUrls: { [id: string]: string | null } = {};
+    await Promise.all(
+      matchedProducts.map(async ({ product }) => {
+        if (!product.image) {
+          loadedImageDataUrls[product.id] = null;
+          return;
+        }
+        try {
+          if (product.image.startsWith('data:image/')) {
+            loadedImageDataUrls[product.id] = product.image;
+            return;
+          }
+          const img = new Image();
+          img.crossOrigin = 'anonymous';
+          img.src = product.image;
+          await new Promise((res) => {
+            img.onload = () => res(true);
+            img.onerror = () => res(false);
+          });
+          const c = document.createElement('canvas');
+          c.width = img.naturalWidth || 100;
+          c.height = img.naturalHeight || 100;
+          const ctx = c.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0);
+            loadedImageDataUrls[product.id] = c.toDataURL('image/jpeg', 0.85);
+          } else {
+            loadedImageDataUrls[product.id] = null;
+          }
+        } catch {
+          loadedImageDataUrls[product.id] = null;
+        }
+      })
+    );
+
+    const itemsPerPageFirst = 9; // Page 1 has large header banner
+    const itemsPerPageSubsequent = 10; // Page 2+ has compact header
+    const rowHeight = 24.5; // mm per row
+
+    // Calculate total pages
+    const totalItems = matchedProducts.length;
+    let totalPages = 1;
+    if (totalItems > itemsPerPageFirst) {
+      const remaining = totalItems - itemsPerPageFirst;
+      totalPages = 1 + Math.ceil(remaining / itemsPerPageSubsequent);
+    }
+
+    const drawHeader = (pageNumber: number) => {
+      if (pageNumber === 1) {
+        // Full Header Banner on Page 1
+        doc.setFillColor(15, 23, 42); // slate-900
+        doc.rect(marginX, 8, contentWidth, 24, 'F');
+
+        // Sky accent line
+        doc.setFillColor(14, 165, 233); // sky-500
+        doc.rect(marginX, 32, contentWidth, 1.2, 'F');
+
+        // Store Name
+        doc.setTextColor(255, 255, 255);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(14);
+        doc.text(storeName || 'depos', marginX + 4, 15);
+
+        // Subtitle
+        doc.setTextColor(56, 189, 248); // sky-400
+        doc.setFontSize(8.5);
+        doc.text('LISTA DE COMPRAS Y PEDIDOS DE MERCADERÍA', marginX + 4, 21);
+
+        // Meta info
+        doc.setTextColor(148, 163, 184); // slate-400
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(7);
+        const dateFormatted = new Date().toLocaleDateString('es-ES', {
+          weekday: 'long',
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric',
+        });
+        doc.text(
+          `Fecha de Emisión: ${dateFormatted}  •  Total: ${matchedProducts.length} artículos  •  Pág. 1 de ${totalPages}`,
+          marginX + 4,
+          27
+        );
+
+        // Table Header
+        const tableHeaderY = 35;
+        doc.setFillColor(241, 245, 249); // slate-100
+        doc.rect(marginX, tableHeaderY, contentWidth, 7, 'F');
+        doc.setDrawColor(203, 213, 225); // slate-300
+        doc.rect(marginX, tableHeaderY, contentWidth, 7, 'S');
+
+        doc.setTextColor(51, 65, 85); // slate-700
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(7);
+        doc.text('FOTO', marginX + 3, tableHeaderY + 4.8);
+        doc.text('PRODUCTO Y EMPAQUE', marginX + 22, tableHeaderY + 4.8);
+        doc.text('CÓDIGOS DE BARRA (UD / BULTO)', marginX + 85, tableHeaderY + 4.8);
+        doc.text('STOCK ACTUAL', marginX + 135, tableHeaderY + 4.8);
+        doc.text('CANTIDAD A PEDIR', marginX + 162, tableHeaderY + 4.8);
+
+        return tableHeaderY + 7;
+      } else {
+        // Compact Header for Subsequent Pages
+        doc.setFillColor(15, 23, 42);
+        doc.rect(marginX, 8, contentWidth, 11, 'F');
+        doc.setFillColor(14, 165, 233);
+        doc.rect(marginX, 19, contentWidth, 0.8, 'F');
+
+        doc.setTextColor(255, 255, 255);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(9.5);
+        doc.text(`${storeName || 'depos'} — LISTA DE COMPRAS`, marginX + 4, 14.5);
+
+        doc.setTextColor(148, 163, 184);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(7);
+        doc.text(`Página ${pageNumber} de ${totalPages}`, marginX + contentWidth - 25, 14.5);
+
+        // Table Header
+        const tableHeaderY = 21;
+        doc.setFillColor(241, 245, 249);
+        doc.rect(marginX, tableHeaderY, contentWidth, 6.5, 'F');
+        doc.setDrawColor(203, 213, 225);
+        doc.rect(marginX, tableHeaderY, contentWidth, 6.5, 'S');
+
+        doc.setTextColor(51, 65, 85);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(7);
+        doc.text('FOTO', marginX + 3, tableHeaderY + 4.5);
+        doc.text('PRODUCTO Y EMPAQUE', marginX + 22, tableHeaderY + 4.5);
+        doc.text('CÓDIGOS DE BARRA (UD / BULTO)', marginX + 85, tableHeaderY + 4.5);
+        doc.text('STOCK ACTUAL', marginX + 135, tableHeaderY + 4.5);
+        doc.text('CANTIDAD A PEDIR', marginX + 162, tableHeaderY + 4.5);
+
+        return tableHeaderY + 6.5;
+      }
+    };
+
+    let currentPage = 1;
+    let currentY = drawHeader(1);
+
+    matchedProducts.forEach(({ product, item }, idx) => {
+      // Check if we need a new page
+      const isPageBreak =
+        currentPage === 1
+          ? idx === itemsPerPageFirst
+          : (idx - itemsPerPageFirst) % itemsPerPageSubsequent === 0;
+
+      if (idx > 0 && isPageBreak) {
+        // Draw page footer on current page
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(6.5);
+        doc.setTextColor(100, 116, 139);
+        doc.text(
+          `depos • Documento de Compras y Abastecimiento • Pág. ${currentPage} de ${totalPages}`,
+          105,
+          291,
+          { align: 'center' }
+        );
+
+        doc.addPage('a4', 'portrait');
+        currentPage++;
+        currentY = drawHeader(currentPage);
+      }
+
+      // Alternating row background
+      if (idx % 2 === 1) {
+        doc.setFillColor(248, 250, 252);
+        doc.rect(marginX, currentY, contentWidth, rowHeight, 'F');
+      }
+
+      // Border outline
+      doc.setDrawColor(226, 232, 240);
+      doc.setLineWidth(0.2);
+      doc.rect(marginX, currentY, contentWidth, rowHeight, 'S');
+
+      // Col 1: Photo / Icon (x: marginX + 2 to marginX + 19)
+      const photoX = marginX + 2.5;
+      const photoY = currentY + 2.5;
+      const photoSize = 18;
+
+      const imgDataUrl = loadedImageDataUrls[product.id];
+      if (imgDataUrl) {
+        try {
+          doc.addImage(imgDataUrl, 'JPEG', photoX, photoY, photoSize, photoSize);
+          doc.setDrawColor(203, 213, 225);
+          doc.setLineWidth(0.2);
+          doc.rect(photoX, photoY, photoSize, photoSize, 'S');
+        } catch {
+          doc.setFillColor(241, 245, 249);
+          doc.rect(photoX, photoY, photoSize, photoSize, 'F');
+          doc.setTextColor(100, 116, 139);
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(8);
+          doc.text(product.name.slice(0, 2).toUpperCase(), photoX + 5, photoY + 11);
+        }
+      } else {
+        doc.setFillColor(241, 245, 249);
+        doc.rect(photoX, photoY, photoSize, photoSize, 'F');
+        doc.setDrawColor(203, 213, 225);
+        doc.setLineWidth(0.2);
+        doc.rect(photoX, photoY, photoSize, photoSize, 'S');
+        doc.setTextColor(100, 116, 139);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(8);
+        doc.text(product.name.slice(0, 2).toUpperCase(), photoX + 5, photoY + 11);
+      }
+
+      // Col 2: Product Name & Packaging (x: marginX + 23, width 60mm)
+      const col2X = marginX + 23;
+      doc.setTextColor(15, 23, 42); // slate-900
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8.5);
+
+      const displayName =
+        product.name.length > 32 ? product.name.slice(0, 30) + '...' : product.name;
+      doc.text(displayName, col2X, currentY + 6);
+
+      // Category / Pasillo
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6.5);
+      doc.setTextColor(100, 116, 139);
+      doc.text(
+        `Pasillo: ${product.category?.trim().toUpperCase().replace(/\s+/g, '-') || 'PASILLO-1'}`,
+        col2X,
+        currentY + 11
+      );
+
+      // Bulk Packaging info
+      const factor = Math.max(1, product.unitsPerBulk || 12);
+      const bulkName = product.bulkUnitName || `Caja x${factor}`;
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(6.5);
+      doc.setTextColor(217, 119, 6); // amber-600
+      doc.text(`Presentación: ${bulkName} (${factor} uds/bulto)`, col2X, currentY + 15.5);
+
+      if (item.customNotes) {
+        doc.setFont('helvetica', 'italic');
+        doc.setFontSize(6);
+        doc.setTextColor(2, 132, 199);
+        doc.text(`Nota: ${item.customNotes}`, col2X, currentY + 19.5);
+      }
+
+      // Col 3: Barcodes (x: marginX + 85, width 48mm)
+      const col3X = marginX + 85;
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(6);
+      doc.setTextColor(51, 65, 85);
+      doc.text('CÓD. UNIDAD:', col3X, currentY + 6);
+
+      doc.setFont('courier', 'bold');
+      doc.setFontSize(7.5);
+      doc.setTextColor(3, 105, 161); // sky-700
+      doc.text(product.barcodeUnit || product.barcode, col3X, currentY + 10.5);
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(6);
+      doc.setTextColor(51, 65, 85);
+      doc.text('CÓD. BULTO:', col3X, currentY + 15);
+
+      doc.setFont('courier', 'bold');
+      doc.setFontSize(7.5);
+      doc.setTextColor(180, 83, 9); // amber-700
+      doc.text(product.barcodeBulk || '--- Sin código ---', col3X, currentY + 19.5);
+
+      // Col 4: Current stock (x: marginX + 135, width 25mm)
+      const col4X = marginX + 135;
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6);
+      doc.setTextColor(100, 116, 139);
+      doc.text('Existencias:', col4X, currentY + 6);
+
+      const isLow = product.stock <= (product.minStockAlertUnit ?? product.minStockAlert ?? 5);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9.5);
+      if (isLow) {
+        doc.setTextColor(220, 38, 38); // rose-600
+      } else {
+        doc.setTextColor(22, 163, 74); // emerald-600
+      }
+      doc.text(`${product.stock} ${product.unit || 'uds'}`, col4X, currentY + 12);
+
+      const currentBulks = Math.floor(product.stock / factor);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6);
+      doc.setTextColor(100, 116, 139);
+      doc.text(`(${currentBulks} bultos)`, col4X, currentY + 17);
+
+      // Col 5: Recuadro de compra interactivo / manual (x: marginX + 160, width 38mm)
+      const boxX = marginX + 158;
+      const boxY = currentY + 2.5;
+      const boxW = 39;
+      const boxH = 19;
+
+      // Outer Box container
+      doc.setFillColor(255, 255, 255);
+      doc.rect(boxX, boxY, boxW, boxH, 'F');
+      doc.setDrawColor(2, 132, 199); // sky-600
+      doc.setLineWidth(0.35);
+      doc.rect(boxX, boxY, boxW, boxH, 'S');
+
+      // Title
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(5.5);
+      doc.setTextColor(3, 105, 161);
+      doc.text('CANTIDAD A PEDIR:', boxX + 2, boxY + 3.2);
+
+      const hasBulksVal = typeof item.bulksToBuy === 'number' && !isNaN(item.bulksToBuy);
+      const hasUnitsVal = typeof item.unitsToBuy === 'number' && !isNaN(item.unitsToBuy);
+
+      // Sub-box Bultos
+      const bultosBoxX = boxX + 2;
+      const bultosBoxY = boxY + 4.2;
+      const subBoxW = 16.5;
+      const subBoxH = 9.2;
+
+      if (hasBulksVal) {
+        doc.setFillColor(240, 249, 255);
+        doc.rect(bultosBoxX, bultosBoxY, subBoxW, subBoxH, 'F');
+        doc.setDrawColor(2, 132, 199);
+        doc.setLineWidth(0.3);
+        doc.rect(bultosBoxX, bultosBoxY, subBoxW, subBoxH, 'S');
+
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(9.5);
+        doc.setTextColor(3, 105, 161);
+        doc.text(String(item.bulksToBuy), bultosBoxX + subBoxW / 2, bultosBoxY + 6.5, {
+          align: 'center',
+        });
+      } else {
+        // Recuadro azul punteado totalmente limpio, transparente y en blanco sin textos
+        doc.setFillColor(255, 255, 255);
+        doc.rect(bultosBoxX, bultosBoxY, subBoxW, subBoxH, 'F');
+        doc.setDrawColor(2, 132, 199); // azul / sky-600
+        doc.setLineWidth(0.35);
+        doc.setLineDashPattern([1.2, 0.8], 0);
+        doc.rect(bultosBoxX, bultosBoxY, subBoxW, subBoxH, 'S');
+        doc.setLineDashPattern([], 0); // reset dash
+      }
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(5.5);
+      doc.setTextColor(51, 65, 85);
+      doc.text('BULTOS', bultosBoxX + subBoxW / 2, boxY + 16.8, { align: 'center' });
+
+      // Sub-box Unidades
+      const unidadesBoxX = boxX + 20.5;
+      const unidadesBoxY = boxY + 4.2;
+
+      if (hasUnitsVal) {
+        doc.setFillColor(240, 249, 255);
+        doc.rect(unidadesBoxX, unidadesBoxY, subBoxW, subBoxH, 'F');
+        doc.setDrawColor(2, 132, 199);
+        doc.setLineWidth(0.3);
+        doc.rect(unidadesBoxX, unidadesBoxY, subBoxW, subBoxH, 'S');
+
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(9.5);
+        doc.setTextColor(3, 105, 161);
+        doc.text(String(item.unitsToBuy), unidadesBoxX + subBoxW / 2, unidadesBoxY + 6.5, {
+          align: 'center',
+        });
+      } else {
+        // Recuadro azul punteado totalmente limpio, transparente y en blanco sin textos
+        doc.setFillColor(255, 255, 255);
+        doc.rect(unidadesBoxX, unidadesBoxY, subBoxW, subBoxH, 'F');
+        doc.setDrawColor(2, 132, 199); // azul / sky-600
+        doc.setLineWidth(0.35);
+        doc.setLineDashPattern([1.2, 0.8], 0);
+        doc.rect(unidadesBoxX, unidadesBoxY, subBoxW, subBoxH, 'S');
+        doc.setLineDashPattern([], 0); // reset dash
+      }
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(5.5);
+      doc.setTextColor(51, 65, 85);
+      doc.text('UNIDADES', unidadesBoxX + subBoxW / 2, boxY + 16.8, { align: 'center' });
+
+      currentY += rowHeight;
+    });
+
+    // Draw footer on last page
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.5);
+    doc.setTextColor(100, 116, 139);
+    doc.text(
+      `depos • Documento de Compras y Abastecimiento • Pág. ${currentPage} de ${totalPages}`,
+      105,
+      291,
+      { align: 'center' }
+    );
+
+    return doc.output('datauristring');
+  },
+
   // Multi-device sync merging
   mergeShoppingList(remoteItems: ShoppingListItem[]): ShoppingListItem[] {
     if (!Array.isArray(remoteItems) || remoteItems.length === 0) {
@@ -728,6 +1194,8 @@ export const ShoppingService = {
           ...remote,
           customNotes: remote.customNotes || existing.customNotes,
           targetQuantity: remote.targetQuantity || existing.targetQuantity,
+          bulksToBuy: remote.bulksToBuy !== undefined ? remote.bulksToBuy : existing.bulksToBuy,
+          unitsToBuy: remote.unitsToBuy !== undefined ? remote.unitsToBuy : existing.unitsToBuy,
         });
       }
     }

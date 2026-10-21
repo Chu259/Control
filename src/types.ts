@@ -45,6 +45,8 @@ export interface ShoppingListItem {
   productId: string;
   customNotes?: string;
   targetQuantity?: string;
+  bulksToBuy?: number; // Cantidad de bultos a comprar ingresada en la app
+  unitsToBuy?: number; // Cantidad de unidades a comprar ingresada en la app
   addedAt: string;
 }
 

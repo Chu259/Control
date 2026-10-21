@@ -5,22 +5,22 @@ import {
   Trash2,
   Barcode,
   Package,
-  Layers,
   Sparkles,
-  AlertTriangle,
   Search,
   CheckCircle2,
   FileImage,
+  FileText,
   RefreshCw,
   X,
-  Eye,
   Share2,
+  Download,
+  ExternalLink,
 } from 'lucide-react';
 import { Product, StoreSettings, ShoppingListItem } from '../types';
 import { ShoppingService } from '../services/shoppingService';
 import { checkStockAlert } from '../utils/stockAlert';
 import { matchProductTokens } from '../utils/searchMatcher';
-import { shareBase64Image } from '../utils/nativeShare';
+import { shareBase64Image, shareBase64Pdf } from '../utils/nativeShare';
 
 interface ShoppingListViewProps {
   products: Product[];
@@ -33,14 +33,16 @@ interface ShoppingListViewProps {
 export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
   products,
   settings,
-  onNavigateToStock,
   onScanSearch,
   highlightProductId,
 }) => {
   const [items, setItems] = useState<ShoppingListItem[]>([]);
-  const [isExporting, setIsExporting] = useState(false);
+  const [isExportingJpg, setIsExportingJpg] = useState(false);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [isSharing, setIsSharing] = useState(false);
+  const [shareType, setShareType] = useState<'jpg' | 'pdf'>('jpg');
   const [exportedImageUrl, setExportedImageUrl] = useState<string | null>(null);
+  const [exportedPdfUrl, setExportedPdfUrl] = useState<string | null>(null);
   const [searchFilter, setSearchFilter] = useState('');
   const [addProductModalOpen, setAddProductModalOpen] = useState(false);
   const [catalogSearch, setCatalogSearch] = useState('');
@@ -141,18 +143,39 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
     }
   };
 
+  // Update Bulks and Units directly from the interactive card fields
+  const handleUpdateItemQuantities = (productId: string, bulksToBuy?: number, unitsToBuy?: number) => {
+    let targetQuantity = '';
+    const b = bulksToBuy ?? 0;
+    const u = unitsToBuy ?? 0;
+    if (bulksToBuy !== undefined && unitsToBuy !== undefined) {
+      targetQuantity = `${b} bultos + ${u} uds`;
+    } else if (bulksToBuy !== undefined) {
+      targetQuantity = `${b} bultos`;
+    } else if (unitsToBuy !== undefined) {
+      targetQuantity = `${u} uds`;
+    }
+
+    const updated = ShoppingService.updateShoppingItem(productId, {
+      bulksToBuy,
+      unitsToBuy,
+      targetQuantity: targetQuantity || undefined,
+    });
+    setItems(updated);
+  };
+
   // Share JPG directly via Capacitor Native Share plugin (@capacitor/share)
   const handleShareExportedImage = async (customUrl?: string) => {
     const imageUrl = customUrl || exportedImageUrl;
     if (!imageUrl) return;
 
     setIsSharing(true);
+    setShareType('jpg');
     try {
-      const fileName = `lista_compras_${new Date().toISOString().slice(0, 10)}.jpg`;
+      const fileName = 'lista_compras.jpg';
       await shareBase64Image(imageUrl, {
         fileName,
         title: `Lista de Compras - ${settings.storeName || 'depos'}`,
-        text: `Lista de compras y abastecimiento de mercadería con códigos de barra (${populatedItems.length} artículos).`,
         dialogTitle: 'Compartir Lista JPG por WhatsApp, Gmail o Guardar',
       });
       setExportMessage('Menú nativo de compartir activado');
@@ -165,14 +188,40 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
     }
   };
 
-  // Export to JPG with product images, dual barcodes and empty handwriting boxes, then trigger native Share
+  // Share PDF directly via Capacitor Native Share plugin (@capacitor/share)
+  const handleShareExportedPdf = async (customUrl?: string) => {
+    const pdfUrl = customUrl || exportedPdfUrl;
+    if (!pdfUrl) return;
+
+    setIsSharing(true);
+    setShareType('pdf');
+    try {
+      const todayStr = new Date().toISOString().slice(0, 10);
+      const fileName = `lista_compras_${todayStr}.pdf`;
+      await shareBase64Pdf(pdfUrl, {
+        fileName,
+        title: `Lista de Compras PDF - ${settings.storeName || 'depos'}`,
+        dialogTitle: 'Compartir Lista PDF por WhatsApp, Gmail o Guardar',
+      });
+      setExportMessage('Menú nativo de compartir activado para PDF');
+      setTimeout(() => setExportMessage(null), 3500);
+    } catch (err) {
+      console.error('Error al compartir PDF:', err);
+      alert('No se pudo abrir el menú nativo de compartir.');
+    } finally {
+      setIsSharing(false);
+    }
+  };
+
+  // Export to JPG with product images, dual barcodes and handwriting/printed boxes, then trigger native Share
   const handleExportJPG = async () => {
     if (populatedItems.length === 0) {
       alert('Agrega al menos un producto a la lista de compras antes de exportar.');
       return;
     }
 
-    setIsExporting(true);
+    setIsExportingJpg(true);
+    setShareType('jpg');
     setExportMessage('Generando imagen JPG de alta resolución...');
     try {
       const jpgUrl = await ShoppingService.exportShoppingListToJPG(
@@ -181,7 +230,7 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
         settings.storeName
       );
       setExportedImageUrl(jpgUrl);
-      setExportMessage('¡Lista de compras generada con éxito!');
+      setExportMessage('¡Lista de compras JPG generada con éxito!');
       
       // Automatically prompt native Android share menu
       await handleShareExportedImage(jpgUrl);
@@ -189,17 +238,46 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
       alert(err instanceof Error ? err.message : 'Error al exportar a formato JPG');
       setExportMessage(null);
     } finally {
-      setIsExporting(false);
+      setIsExportingJpg(false);
+    }
+  };
+
+  // Export to multi-page Vectorial A4 PDF, then trigger native Share
+  const handleExportPDF = async () => {
+    if (populatedItems.length === 0) {
+      alert('Agrega al menos un producto a la lista de compras antes de exportar.');
+      return;
+    }
+
+    setIsExportingPdf(true);
+    setShareType('pdf');
+    setExportMessage('Generando documento PDF vectorial A4 hiper nítido...');
+    try {
+      const pdfUrl = await ShoppingService.exportShoppingListToPDF(
+        products,
+        items,
+        settings.storeName
+      );
+      setExportedPdfUrl(pdfUrl);
+      setExportMessage('¡Documento PDF vectorial A4 generado con éxito!');
+      
+      // Automatically prompt native Android share menu
+      await handleShareExportedPdf(pdfUrl);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Error al exportar a formato PDF');
+      setExportMessage(null);
+    } finally {
+      setIsExportingPdf(false);
     }
   };
 
   return (
     <div id="shopping-list-view" className="p-4 space-y-4 pb-24 max-w-3xl mx-auto">
-      {/* Top Banner */}
+      {/* Top Banner with Dual Export Selector */}
       <div className="bg-gradient-to-br from-[#131b2e] via-[#161c28] to-[#12141c] border border-sky-500/30 rounded-2xl p-4 shadow-xl">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-xl bg-sky-500/20 text-sky-400 flex items-center justify-center font-bold">
+            <div className="w-11 h-11 rounded-xl bg-sky-500/20 text-sky-400 flex items-center justify-center font-bold flex-shrink-0">
               <ShoppingCart className="w-6 h-6" />
             </div>
             <div>
@@ -210,35 +288,65 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
                 </span>
               </h2>
               <p className="text-xs text-zinc-400">
-                Exporta y comparte en formato JPG con fotos, códigos y recuadro para anotar a mano
+                Exporta y comparte en formato JPG o PDF vectorial A4 con fotos, códigos y cantidades
               </p>
             </div>
           </div>
 
-          {/* Export & Share JPG Button */}
-          <button
-            id="export-shopping-jpg-btn"
-            onClick={handleExportJPG}
-            disabled={isExporting || isSharing || populatedItems.length === 0}
-            className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 disabled:opacity-40 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-sky-500/20 transition-all active:scale-95"
-          >
-            {isExporting ? (
-              <>
-                <RefreshCw className="w-4 h-4 animate-spin" />
-                <span>Generando JPG...</span>
-              </>
-            ) : isSharing ? (
-              <>
-                <RefreshCw className="w-4 h-4 animate-spin" />
-                <span>Abriendo Menú...</span>
-              </>
-            ) : (
-              <>
-                <Share2 className="w-4 h-4" />
-                <span>Compartir Lista JPG</span>
-              </>
-            )}
-          </button>
+          {/* Selector de Exportación Doble (JPG o PDF Nativo) */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Botón 1: Compartir Lista JPG */}
+            <button
+              id="export-shopping-jpg-btn"
+              onClick={handleExportJPG}
+              disabled={isExportingJpg || isExportingPdf || isSharing || populatedItems.length === 0}
+              className="flex-1 sm:flex-initial px-3.5 py-2.5 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 disabled:opacity-40 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-sky-500/20 transition-all active:scale-95"
+              title="Para listas cortas con renderizado de imagen rápida"
+            >
+              {isExportingJpg ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <span>Generando JPG...</span>
+                </>
+              ) : isSharing && shareType === 'jpg' ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <span>Abriendo...</span>
+                </>
+              ) : (
+                <>
+                  <Share2 className="w-4 h-4" />
+                  <span>Compartir Lista JPG</span>
+                </>
+              )}
+            </button>
+
+            {/* Botón 2: Compartir Lista PDF (A4 Vectorial Hiper Nítido) */}
+            <button
+              id="export-shopping-pdf-btn"
+              onClick={handleExportPDF}
+              disabled={isExportingJpg || isExportingPdf || isSharing || populatedItems.length === 0}
+              className="flex-1 sm:flex-initial px-3.5 py-2.5 rounded-xl bg-gradient-to-r from-rose-600 to-red-700 hover:from-rose-500 hover:to-red-600 disabled:opacity-40 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-rose-600/20 transition-all active:scale-95"
+              title="Documento PDF vectorial de múltiples páginas (A4) hiper nítido sin pixelarse para WhatsApp o impresión"
+            >
+              {isExportingPdf ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <span>Generando PDF...</span>
+                </>
+              ) : isSharing && shareType === 'pdf' ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <span>Abriendo...</span>
+                </>
+              ) : (
+                <>
+                  <FileText className="w-4 h-4" />
+                  <span>Compartir Lista PDF</span>
+                </>
+              )}
+            </button>
+          </div>
         </div>
 
         {exportMessage && (
@@ -429,50 +537,66 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
                         {bulkUnitName} ({unitsPerBulk} uds/cj)
                       </span>
                     </div>
-
-                    {/* Direct Quantity / Note to Buy */}
-                    <div className="mt-2 flex items-center gap-2">
-                      <label className="text-[11px] font-semibold text-sky-300">
-                        Cantidad a Comprar:
-                      </label>
-                      <input
-                        type="text"
-                        defaultValue={item.targetQuantity || ''}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          ShoppingService.updateShoppingItem(product.id, { targetQuantity: val });
-                        }}
-                        autoFocus={isHighlighted}
-                        placeholder="ej: 10 cj ó 120 uds"
-                        className="bg-[#0e111a] border border-sky-500/50 rounded-lg px-2.5 py-1 text-xs text-white font-mono font-bold focus:outline-none focus:border-sky-400 w-44 shadow-inner"
-                      />
-                    </div>
                   </div>
                 </div>
 
-                {/* Right: RECUADRO VACÍO PARA ANOTAR MANUALMENTE LAS CANTIDADES A COMPRAR */}
+                {/* Right: RECUADRO EDITABLE DE COMPRA DIRECTA (BULTOS Y UNIDADES) */}
                 <div className="flex items-center gap-3 border-t md:border-t-0 md:border-l border-white/10 pt-2 md:pt-0 md:pl-4 flex-shrink-0">
-                  <div className="bg-[#0b0e14] border-2 border-dashed border-sky-400/50 rounded-xl p-2.5 text-center min-w-[200px] shadow-inner">
-                    <p className="text-[10px] font-bold text-sky-300 uppercase tracking-wider mb-1.5">
-                      Recuadro para anotar a mano
+                  <div className="bg-[#0b0e14] border-2 border-dashed border-sky-400/50 rounded-xl p-2.5 text-center min-w-[210px] shadow-inner">
+                    <p className="text-[10px] font-bold text-sky-300 uppercase tracking-wider mb-1">
+                      Cantidad a Comprar / Anotar
                     </p>
                     <div className="flex items-center justify-center gap-2.5 my-1">
+                      {/* BULTOS Input */}
                       <div className="flex flex-col items-center">
-                        <div className="h-8 w-18 border-2 border-dashed border-white/30 bg-white/5 rounded-lg flex items-center justify-center">
-                          <span className="text-[10px] text-zinc-600 font-mono italic">vacío</span>
-                        </div>
+                        <input
+                          id={`input-bulks-${product.id}`}
+                          type="number"
+                          min="0"
+                          step="1"
+                          inputMode="numeric"
+                          value={item.bulksToBuy !== undefined && item.bulksToBuy !== null ? item.bulksToBuy : ''}
+                          onChange={(e) => {
+                            const valStr = e.target.value.trim();
+                            const newBulks = valStr === '' ? undefined : Math.max(0, parseInt(valStr, 10) || 0);
+                            handleUpdateItemQuantities(product.id, newBulks, item.unitsToBuy);
+                          }}
+                          placeholder=""
+                          autoFocus={isHighlighted}
+                          className="h-9 w-20 border-2 rounded-lg text-center font-mono font-bold text-sm text-sky-300 bg-[#0e121d] border-sky-500/60 focus:border-sky-400 focus:bg-[#121826] focus:outline-none transition-colors shadow-inner"
+                        />
                         <span className="text-[8.5px] font-bold text-zinc-300 mt-1 uppercase tracking-wide">BULTOS</span>
                       </div>
+
+                      {/* UNIDADES Input */}
                       <div className="flex flex-col items-center">
-                        <div className="h-8 w-18 border-2 border-dashed border-white/30 bg-white/5 rounded-lg flex items-center justify-center">
-                          <span className="text-[10px] text-zinc-600 font-mono italic">vacío</span>
-                        </div>
+                        <input
+                          id={`input-units-${product.id}`}
+                          type="number"
+                          min="0"
+                          step="1"
+                          inputMode="numeric"
+                          value={item.unitsToBuy !== undefined && item.unitsToBuy !== null ? item.unitsToBuy : ''}
+                          onChange={(e) => {
+                            const valStr = e.target.value.trim();
+                            const newUnits = valStr === '' ? undefined : Math.max(0, parseInt(valStr, 10) || 0);
+                            handleUpdateItemQuantities(product.id, item.bulksToBuy, newUnits);
+                          }}
+                          placeholder=""
+                          className="h-9 w-20 border-2 rounded-lg text-center font-mono font-bold text-sm text-sky-300 bg-[#0e121d] border-sky-500/60 focus:border-sky-400 focus:bg-[#121826] focus:outline-none transition-colors shadow-inner"
+                        />
                         <span className="text-[8.5px] font-bold text-zinc-300 mt-1 uppercase tracking-wide">UNIDADES</span>
                       </div>
                     </div>
-                    <span className="text-[8.5px] text-zinc-500 block mt-1">
-                      (Cuadros en blanco en el JPG para anotar a mano)
-                    </span>
+                    {item.bulksToBuy !== undefined || item.unitsToBuy !== undefined ? (
+                      <span className="text-[8px] text-emerald-400 font-semibold block mt-1">
+                        ✔ Cantidades fijas para imprimir
+                      </span>
+                    ) : (
+                      <span className="text-[8px] text-zinc-500 block mt-1">
+                        (Casillero en blanco para anotar a mano)
+                      </span>
+                    )}
                   </div>
 
                   {/* Remove Button */}
@@ -649,7 +773,7 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
 
             <div className="p-3 border-t border-white/10 bg-[#12141c] flex items-center justify-between gap-3">
               <span className="text-xs text-zinc-400 hidden sm:inline">
-                Formato JPG con fotos, códigos y recuadros manuales
+                Formato JPG con fotos, códigos y recuadros
               </span>
               <button
                 type="button"
@@ -667,6 +791,86 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
                   <>
                     <Share2 className="w-4 h-4" />
                     <span>Compartir Lista JPG</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Exported PDF Preview Modal */}
+      {exportedPdfUrl && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-fade-in">
+          <div className="relative w-full max-w-2xl bg-[#161922] border border-rose-500/30 rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+            <div className="flex items-center justify-between p-3.5 border-b border-white/10 bg-[#12141c]">
+              <div className="flex items-center gap-2">
+                <FileText className="w-5 h-5 text-rose-500" />
+                <div>
+                  <h3 className="text-sm font-bold text-white">Documento PDF Vectorial Generado (A4)</h3>
+                  <p className="text-[11px] text-zinc-400">Hiper nítido, sin pixelarse, listo para WhatsApp, impresión o compartir</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setExportedPdfUrl(null)}
+                className="p-1 rounded-lg text-zinc-400 hover:text-white hover:bg-white/10"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-4 overflow-y-auto flex-1 bg-zinc-900 flex flex-col items-center justify-center text-center space-y-4 min-h-[220px]">
+              <div className="w-16 h-16 rounded-2xl bg-rose-500/15 text-rose-400 flex items-center justify-center mx-auto border border-rose-500/30">
+                <FileText className="w-8 h-8" />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-white">Lista de Compras Lista en Formato PDF</h4>
+                <p className="text-xs text-zinc-400 max-w-md mx-auto mt-1">
+                  El archivo PDF contiene {populatedItems.length} artículos con fotos a color, códigos de barra y recuadros con números fijos o casilleros vacíos.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <a
+                  href={exportedPdfUrl}
+                  download={`lista_compras_${new Date().toISOString().slice(0, 10)}.pdf`}
+                  className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                >
+                  <Download className="w-4 h-4 text-zinc-300" />
+                  <span>Descargar Archivo</span>
+                </a>
+                <a
+                  href={exportedPdfUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                >
+                  <ExternalLink className="w-4 h-4 text-zinc-300" />
+                  <span>Abrir en Nueva Pestaña</span>
+                </a>
+              </div>
+            </div>
+
+            <div className="p-3 border-t border-white/10 bg-[#12141c] flex items-center justify-between gap-3">
+              <span className="text-xs text-zinc-400 hidden sm:inline">
+                Formato PDF A4 Vectorial Nativo
+              </span>
+              <button
+                type="button"
+                id="btn-share-shopping-pdf-modal"
+                onClick={() => handleShareExportedPdf(exportedPdfUrl)}
+                disabled={isSharing}
+                className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-rose-600 to-red-700 hover:from-rose-500 hover:to-red-600 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-rose-600/25 active:scale-95 transition-all ml-auto"
+              >
+                {isSharing ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <span>Compartiendo...</span>
+                  </>
+                ) : (
+                  <>
+                    <Share2 className="w-4 h-4" />
+                    <span>Compartir Lista PDF</span>
                   </>
                 )}
               </button>
