@@ -47,6 +47,7 @@ import { matchProductTokens } from './utils/searchMatcher';
 import { NotificationService } from './services/pushNotifications';
 import { InAppPushBanner } from './components/InAppPushBanner';
 import { NetworkPermissionService } from './services/networkPermissions';
+import { ImageStorageService } from './services/imageStorageService';
 
 export default function App() {
   const [products, setProducts] = useState<Product[]>([]);
@@ -127,6 +128,8 @@ export default function App() {
     reloadAllData();
     // Request location / nearby devices permission on startup for local Wi-Fi Hotspot transmission
     NetworkPermissionService.requestOnStartup();
+    // Initialize public images directory /depos_images for Scoped Storage accessibility
+    ImageStorageService.initImageDirectory().catch(() => {});
   }, []);
 
   const reloadAllData = () => {

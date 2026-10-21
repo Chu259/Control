@@ -4,6 +4,7 @@ import { AuthService } from './authService';
 import { ShoppingService } from './shoppingService';
 import { CloudBackupService } from './cloudBackupService';
 import { AntiTheftService } from './antiTheftService';
+import { ImageStorageService } from './imageStorageService';
 
 const STORAGE_KEYS = {
   PRODUCTS: 'stock_app_products_v1',
@@ -184,6 +185,14 @@ export const StorageService = {
       }
     }
     this.saveProducts(updated);
+
+    // Guardar réplica física de la foto en la carpeta pública depos_images (ej: 7790670050012.jpg)
+    if (normalizedProduct.image) {
+      ImageStorageService.saveProductImageReplica(normalizedProduct).catch((err) => {
+        console.warn('Error guardando réplica física en depos_images:', err);
+      });
+    }
+
     return updated;
   },
 
@@ -1426,6 +1435,11 @@ export const StorageService = {
       // Persistir catálogo y movimientos actualizados
       this.saveProducts(finalProducts);
       this.saveMovements(mergedMovements.slice(0, 1000));
+
+      // Guardar réplicas físicas de todas las fotos en la carpeta pública depos_images
+      ImageStorageService.replicateAllProductImages(finalProducts).catch((err) => {
+        console.warn('Error replicando fotos importadas en depos_images:', err);
+      });
 
       // Fusión de categorías y pasillos de colores
       if (Array.isArray(bundle.categories)) {

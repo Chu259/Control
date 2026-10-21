@@ -37,6 +37,7 @@ import { Sound } from '../services/sound';
 import { NotificationService } from '../services/pushNotifications';
 import { NetworkPermissionService } from '../services/networkPermissions';
 import { NativeFileService } from '../services/nativeFileService';
+import { ImageStorageService } from '../services/imageStorageService';
 
 interface SyncViewProps {
   products: Product[];
@@ -709,6 +710,9 @@ export const SyncView: React.FC<SyncViewProps> = ({
         StorageService.markProductReviewed(p.id);
       }
       StorageService.markAllProductsReviewed(productIds);
+
+      // Replicar imágenes de los productos aprobados en la carpeta pública depos_images
+      ImageStorageService.replicateAllProductImages(targetProducts).catch(() => {});
 
       // 2. Notificación al servicio de sincronización / P2P en segundo plano sin trabar la interfaz
       try {

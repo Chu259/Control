@@ -13,8 +13,6 @@ import {
   RefreshCw,
   X,
   Share2,
-  Download,
-  ExternalLink,
 } from 'lucide-react';
 import { Product, StoreSettings, ShoppingListItem } from '../types';
 import { ShoppingService } from '../services/shoppingService';
@@ -819,53 +817,30 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
               </button>
             </div>
 
-            <div className="p-4 overflow-y-auto flex-1 bg-zinc-900 flex flex-col items-center justify-center text-center space-y-4 min-h-[220px]">
+            <div className="p-6 overflow-y-auto flex-1 bg-zinc-900 flex flex-col items-center justify-center text-center space-y-3 min-h-[180px]">
               <div className="w-16 h-16 rounded-2xl bg-rose-500/15 text-rose-400 flex items-center justify-center mx-auto border border-rose-500/30">
                 <FileText className="w-8 h-8" />
               </div>
               <div>
-                <h4 className="text-sm font-bold text-white">Lista de Compras Lista en Formato PDF</h4>
+                <h4 className="text-sm font-bold text-white">Lista de Compras en Formato PDF (A4)</h4>
                 <p className="text-xs text-zinc-400 max-w-md mx-auto mt-1">
-                  El archivo PDF contiene {populatedItems.length} artículos con fotos a color, códigos de barra y recuadros con números fijos o casilleros vacíos.
+                  El documento vectorial contiene {populatedItems.length} artículos con fotos, códigos de barra y recuadros de compra nítidos sin pixelación.
                 </p>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <a
-                  href={exportedPdfUrl}
-                  download={`lista_compras_${new Date().toISOString().slice(0, 10)}.pdf`}
-                  className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors"
-                >
-                  <Download className="w-4 h-4 text-zinc-300" />
-                  <span>Descargar Archivo</span>
-                </a>
-                <a
-                  href={exportedPdfUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors"
-                >
-                  <ExternalLink className="w-4 h-4 text-zinc-300" />
-                  <span>Abrir en Nueva Pestaña</span>
-                </a>
               </div>
             </div>
 
-            <div className="p-3 border-t border-white/10 bg-[#12141c] flex items-center justify-between gap-3">
-              <span className="text-xs text-zinc-400 hidden sm:inline">
-                Formato PDF A4 Vectorial Nativo
-              </span>
+            <div className="p-3.5 border-t border-white/10 bg-[#12141c]">
               <button
                 type="button"
                 id="btn-share-shopping-pdf-modal"
                 onClick={() => handleShareExportedPdf(exportedPdfUrl)}
                 disabled={isSharing}
-                className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-rose-600 to-red-700 hover:from-rose-500 hover:to-red-600 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-rose-600/25 active:scale-95 transition-all ml-auto"
+                className="w-full py-3 rounded-xl bg-gradient-to-r from-rose-600 to-red-700 hover:from-rose-500 hover:to-red-600 disabled:opacity-50 text-white font-bold text-sm flex items-center justify-center gap-2 shadow-lg shadow-rose-600/30 active:scale-95 transition-all"
               >
                 {isSharing ? (
                   <>
                     <RefreshCw className="w-4 h-4 animate-spin" />
-                    <span>Compartiendo...</span>
+                    <span>Abriendo menú nativo...</span>
                   </>
                 ) : (
                   <>
