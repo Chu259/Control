@@ -1,5 +1,5 @@
 import React from 'react';
-import { Bell, Search, ShieldCheck, Moon, RefreshCw, Smartphone, Barcode, Camera, User, Lock, LogOut } from 'lucide-react';
+import { Bell, Search, ShieldCheck, Moon, RefreshCw, Smartphone, Barcode, Camera, User, Lock, LogOut, Sparkles } from 'lucide-react';
 import { StoreSettings, AppUser } from '../types';
 
 interface AndroidHeaderProps {
@@ -7,6 +7,7 @@ interface AndroidHeaderProps {
   lowStockCount: number;
   onOpenAlerts: () => void;
   onOpenSync?: () => void;
+  onOpenAsistente?: () => void;
   onScanBarcode?: () => void;
   searchQuery: string;
   onSearchChange: (q: string) => void;
@@ -21,6 +22,7 @@ export const AndroidHeader: React.FC<AndroidHeaderProps> = ({
   lowStockCount,
   onOpenAlerts,
   onOpenSync,
+  onOpenAsistente,
   onScanBarcode,
   searchQuery,
   onSearchChange,
@@ -111,6 +113,18 @@ export const AndroidHeader: React.FC<AndroidHeaderProps> = ({
             >
               <RefreshCw className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">{isMaster ? 'Servidor BD' : 'Sincronizar'}</span>
+            </button>
+          )}
+
+          {/* depos Asistente quick button */}
+          {onOpenAsistente && (
+            <button
+              onClick={onOpenAsistente}
+              className="p-2 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-400/30 text-cyan-400 flex items-center gap-1 text-[11px] font-bold transition-all"
+              title="Abrir depos Asistente (Catálogo y Extractor de Fotos)"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Asistente</span>
             </button>
           )}
 

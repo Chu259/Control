@@ -20,6 +20,7 @@ import {
   ShieldCheck,
   LogOut,
   CalendarClock,
+  Sparkles,
 } from 'lucide-react';
 import { AppTab, AppUser } from '../types';
 
@@ -65,6 +66,7 @@ export const NavigationMenu: React.FC<NavigationMenuProps> = ({
 
   const secondaryTabs: { id: AppTab; label: string; icon: React.FC<{ className?: string }>; desc: string }[] = [
     { id: 'expirations', label: 'Agenda de Vencimientos', icon: CalendarClock, desc: 'Control de fin de mes y alarmas horarias' },
+    { id: 'asistente', label: 'depos Asistente', icon: Sparkles, desc: 'Escáner en ráfaga y extractor de fotos Google' },
     ...(!isPersonal
       ? [
           { id: 'users' as AppTab, label: 'Usuarios y Accesos', icon: Users, desc: 'Administradores, celulares y auditoría' },

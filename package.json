@@ -10,7 +10,9 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
+    "build:asistente": "VITE_APP_MODE=asistente vite build",
     "build:android": "vite build && cap sync android",
+    "build:android:asistente": "VITE_APP_MODE=asistente vite build && cp capacitor.asistente.json capacitor.config.json && cap sync android",
     "open:android": "cap open android"
   },
   "dependencies": {

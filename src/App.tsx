@@ -48,6 +48,7 @@ import { NotificationService } from './services/pushNotifications';
 import { InAppPushBanner } from './components/InAppPushBanner';
 import { NetworkPermissionService } from './services/networkPermissions';
 import { ImageStorageService } from './services/imageStorageService';
+import { CatalogAssistantView } from './components/CatalogAssistantView';
 
 export default function App() {
   const [products, setProducts] = useState<Product[]>([]);
@@ -55,8 +56,16 @@ export default function App() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [settings, setSettings] = useState<StoreSettings>(StorageService.getSettings());
 
-  // Navigation & View Mode
-  const [currentTab, setCurrentTab] = useState<AppTab>('inventory');
+  // Navigation & View Mode (Supports direct launch into depos Asistente)
+  const [currentTab, setCurrentTab] = useState<AppTab>(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('app') === 'asistente' || localStorage.getItem('depos_app_mode') === 'asistente') {
+        return 'asistente';
+      }
+    }
+    return 'inventory';
+  });
   const [viewMode, setViewMode] = useState<ViewMode>('grid-small');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -587,6 +596,18 @@ export default function App() {
     );
   }
 
+  // Standalone full-screen view for depos Asistente
+  if (currentTab === 'asistente') {
+    return (
+      <CatalogAssistantView
+        onSwitchToMainApp={() => {
+          localStorage.setItem('depos_app_mode', 'depos');
+          setCurrentTab('inventory');
+        }}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#0a0c12] text-zinc-100 font-sans flex justify-center selection:bg-teal-500 selection:text-black">
       {/* Centered Android device container */}
@@ -598,6 +619,10 @@ export default function App() {
             lowStockCount={totalAlertsCount}
             onOpenAlerts={() => setCurrentTab('alerts')}
             onOpenSync={() => setCurrentTab('sync')}
+            onOpenAsistente={() => {
+              localStorage.setItem('depos_app_mode', 'asistente');
+              setCurrentTab('asistente');
+            }}
             onScanBarcode={handleOpenSearchScanner}
             searchQuery={searchQuery}
             onSearchChange={setSearchQuery}

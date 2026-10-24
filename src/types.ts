@@ -222,5 +222,6 @@ export type AppTab =
   | 'sync'
   | 'users'
   | 'settings'
-  | 'expirations';
+  | 'expirations'
+  | 'asistente';
 export type ViewMode = 'grid-small' | 'grid-large' | 'list';

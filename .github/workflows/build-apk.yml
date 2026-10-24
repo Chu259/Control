@@ -55,18 +55,30 @@ jobs:
         chmod +x android/gradlew || true
         chmod 755 android/gradlew || true
 
-    - name: Run Build Gradle
+    - name: Run Build Gradle (depos)
       run: |
         cd android
         ./gradlew assembleDebug
-
-    - name: Prepare APK with name depos
-      run: |
-        if [ -f android/app/build/outputs/apk/debug/app-debug.apk ]; then
-          cp android/app/build/outputs/apk/debug/app-debug.apk android/app/build/outputs/apk/debug/depos.apk
+        if [ -f app/build/outputs/apk/debug/app-debug.apk ]; then
+          cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/depos.apk
         fi
+        cd ..
 
-    - name: Firmar APK con tu clave fija
+    - name: Build Second APK (depos Asistente)
+      run: |
+        bun run build:asistente
+        cp capacitor.asistente.json capacitor.config.json
+        bunx cap sync android
+        cd android
+        ./gradlew assembleDebug
+        if [ -f app/build/outputs/apk/debug/app-debug.apk ]; then
+          cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/depos-asistente.apk
+        fi
+        cd ..
+        # Restore default config
+        git checkout capacitor.config.json || true
+
+    - name: Firmar APKs con tu clave fija
       uses: r0adkll/sign-android-release@v1
       id: sign_app
       with:
@@ -78,10 +90,12 @@ jobs:
       env:
         BUILD_TOOLS_VERSION: "34.0.0"
 
-    - name: Upload APK Artifact
+    - name: Upload APK Artifacts (depos & depos Asistente)
       uses: actions/upload-artifact@v4
       with:
-        name: depos-apk
+        name: depos-apks
         path: |
           android/app/build/outputs/apk/debug/depos-signed.apk
+          android/app/build/outputs/apk/debug/depos-asistente-signed.apk
           android/app/build/outputs/apk/debug/app-debug-signed.apk
+          android/app/build/outputs/apk/debug/*.apk

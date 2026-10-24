@@ -61,7 +61,8 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
   const [filterTab, setFilterTab] = useState<'pending' | 'resolved' | 'all'>('pending');
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Camera scanner state
+  // Camera scanner state - Starts completely OFF and at rest to prevent Android sensor freezing
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [cameraActive, setCameraActive] = useState(false);
@@ -136,13 +137,17 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
     return barcodeDetectorRef.current;
   };
 
-  // Start camera on mount, stop on unmount
+  // Camera lifecycle: sensor stays completely OFF until user clicks "🔍 Escanear Producto"
   useEffect(() => {
-    startCamera();
+    if (isScannerOpen) {
+      startCamera();
+    } else {
+      stopCamera();
+    }
     return () => {
       stopCamera();
     };
-  }, [facingMode]);
+  }, [isScannerOpen, facingMode]);
 
   const startCamera = async () => {
     setCameraError(null);
@@ -235,17 +240,12 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
 
     Sound.playScanBeep();
 
-    // 1. Congelar Cámara por completo tras detección (Evitar doble escaneo)
-    if (videoRef.current) {
-      try {
-        videoRef.current.pause();
-      } catch (e) {
-        console.warn('Error pausing video:', e);
-      }
-    }
-    setIsCameraFrozen(true);
-    isCameraFrozenRef.current = true;
-    isProcessingRef.current = true;
+    // 1. Apagar y cerrar la cámara de inmediato para liberar el sensor nativo de Android
+    stopCamera();
+    setIsScannerOpen(false);
+    setIsCameraFrozen(false);
+    isCameraFrozenRef.current = false;
+    isProcessingRef.current = false;
 
     // Look up in products catalog
     const found = products.find(
@@ -483,106 +483,143 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
         </div>
       </div>
 
-      {/* Camera Live Viewport (Clean & Always Active) */}
-      <div className="relative rounded-2xl overflow-hidden bg-black border border-white/10 shadow-2xl aspect-[16/10] sm:aspect-[16/9] flex items-center justify-center">
-        <video
-          ref={videoRef}
-          className="w-full h-full object-cover"
-          playsInline
-          muted
-        />
-
-        {/* Reticle Overlay */}
-        <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-          <div className={`w-4/5 h-2/3 border-2 border-dashed rounded-xl relative transition-all ${
-            isCameraFrozen
-              ? 'border-amber-400/90 shadow-[0_0_25px_rgba(251,191,36,0.4)]'
-              : 'border-teal-400/80 shadow-[0_0_20px_rgba(20,184,166,0.3)]'
-          }`}>
-            <div className={`absolute top-0 left-0 w-4 h-4 border-t-4 border-l-4 -mt-1 -ml-1 rounded-tl ${isCameraFrozen ? 'border-amber-400' : 'border-teal-400'}`} />
-            <div className={`absolute top-0 right-0 w-4 h-4 border-t-4 border-r-4 -mt-1 -mr-1 rounded-tr ${isCameraFrozen ? 'border-amber-400' : 'border-teal-400'}`} />
-            <div className={`absolute bottom-0 left-0 w-4 h-4 border-b-4 border-l-4 -mb-1 -ml-1 rounded-bl ${isCameraFrozen ? 'border-amber-400' : 'border-teal-400'}`} />
-            <div className={`absolute bottom-0 right-0 w-4 h-4 border-b-4 border-r-4 -mb-1 -mr-1 rounded-br ${isCameraFrozen ? 'border-amber-400' : 'border-teal-400'}`} />
-
-            {!isCameraFrozen && (
-              <div className="w-full h-0.5 bg-gradient-to-r from-transparent via-teal-400 to-transparent animate-pulse absolute top-1/2 -translate-y-1/2" />
-            )}
+      {/* Camera Section: Standby Mode or Active MLKit Viewport */}
+      {!isScannerOpen ? (
+        <div className="bg-gradient-to-br from-zinc-900 to-zinc-950 border border-teal-500/30 rounded-2xl p-5 shadow-xl text-center space-y-3.5">
+          <div className="w-14 h-14 rounded-2xl bg-teal-500/10 border border-teal-500/30 text-teal-400 flex items-center justify-center mx-auto shadow-inner">
+            <Camera className="w-7 h-7" />
+          </div>
+          <div>
+            <h3 className="text-sm font-bold text-white flex items-center justify-center gap-2">
+              <span>Visor de Cámara en Reposo</span>
+              <span className="w-2 h-2 rounded-full bg-zinc-500 inline-block" />
+            </h3>
+            <p className="text-xs text-zinc-400 max-w-sm mx-auto mt-1">
+              Sensor apagado para evitar congelamiento de Android y ahorrar batería en consultas prolongadas.
+            </p>
+          </div>
+          <div className="pt-1">
+            <button
+              type="button"
+              onClick={() => setIsScannerOpen(true)}
+              className="inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-xl bg-gradient-to-r from-teal-500 via-emerald-500 to-teal-400 hover:brightness-110 text-black font-extrabold text-sm shadow-xl shadow-teal-500/25 active:scale-95 transition-all w-full sm:w-auto"
+            >
+              <Camera className="w-5 h-5 text-black" />
+              <span>🔍 Escanear Producto</span>
+            </button>
           </div>
         </div>
+      ) : (
+        <div className="relative rounded-2xl overflow-hidden bg-black border border-white/10 shadow-2xl aspect-[16/10] sm:aspect-[16/9] flex items-center justify-center">
+          <video
+            ref={videoRef}
+            className="w-full h-full object-cover"
+            playsInline
+            muted
+          />
 
-        {/* Frozen Indicator Overlay */}
-        {isCameraFrozen && (
-          <div className="absolute inset-0 bg-black/45 backdrop-blur-[1px] flex flex-col items-center justify-center p-3 text-center pointer-events-none z-10 animate-fade-in">
-            <div className="bg-black/85 border border-amber-400/70 rounded-2xl px-4 py-2.5 shadow-2xl max-w-xs space-y-1">
-              <div className="flex items-center justify-center gap-1.5 text-amber-300 text-xs font-bold">
-                <Pause className="w-3.5 h-3.5 text-amber-400" />
-                <span>Cámara Pausada / Visor Congelado</span>
-              </div>
-              <p className="text-[10px] text-zinc-300 leading-snug">
-                Código detectado con éxito. Interactúa con el formulario abajo sin peligro de reescaneo.
-              </p>
+          {/* Reticle Overlay */}
+          <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+            <div className={`w-4/5 h-2/3 border-2 border-dashed rounded-xl relative transition-all ${
+              isCameraFrozen
+                ? 'border-amber-400/90 shadow-[0_0_25px_rgba(251,191,36,0.4)]'
+                : 'border-teal-400/80 shadow-[0_0_20px_rgba(20,184,166,0.3)]'
+            }`}>
+              <div className={`absolute top-0 left-0 w-4 h-4 border-t-4 border-l-4 -mt-1 -ml-1 rounded-tl ${isCameraFrozen ? 'border-amber-400' : 'border-teal-400'}`} />
+              <div className={`absolute top-0 right-0 w-4 h-4 border-t-4 border-r-4 -mt-1 -mr-1 rounded-tr ${isCameraFrozen ? 'border-amber-400' : 'border-teal-400'}`} />
+              <div className={`absolute bottom-0 left-0 w-4 h-4 border-b-4 border-l-4 -mb-1 -ml-1 rounded-bl ${isCameraFrozen ? 'border-amber-400' : 'border-teal-400'}`} />
+              <div className={`absolute bottom-0 right-0 w-4 h-4 border-b-4 border-r-4 -mb-1 -mr-1 rounded-br ${isCameraFrozen ? 'border-amber-400' : 'border-teal-400'}`} />
+
+              {!isCameraFrozen && (
+                <div className="w-full h-0.5 bg-gradient-to-r from-transparent via-teal-400 to-transparent animate-pulse absolute top-1/2 -translate-y-1/2" />
+              )}
             </div>
           </div>
-        )}
 
-        {/* Top Camera Controls */}
-        <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between pointer-events-auto z-20">
-          <div className={`flex items-center gap-1.5 backdrop-blur-md px-2.5 py-1 rounded-full border text-[11px] ${
-            isCameraFrozen
-              ? 'bg-amber-950/80 border-amber-500/40 text-amber-300'
-              : 'bg-black/60 border-white/10 text-teal-300'
-          }`}>
-            {isCameraFrozen ? (
-              <>
-                <Pause className="w-3 h-3 text-amber-400" />
-                <span>Captura pausada para edición</span>
-              </>
-            ) : (
-              <>
-                <span className="w-2 h-2 rounded-full bg-teal-400 animate-ping" />
-                <span>MLKit Escaneando continuo</span>
-              </>
-            )}
+          {/* Top Camera Controls */}
+          <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between pointer-events-auto z-20">
+            <div className={`flex items-center gap-1.5 backdrop-blur-md px-2.5 py-1 rounded-full border text-[11px] ${
+              isCameraFrozen
+                ? 'bg-amber-950/80 border-amber-500/40 text-amber-300'
+                : 'bg-black/60 border-white/10 text-teal-300'
+            }`}>
+              {isCameraFrozen ? (
+                <>
+                  <Pause className="w-3 h-3 text-amber-400" />
+                  <span>Captura pausada</span>
+                </>
+              ) : (
+                <>
+                  <span className="w-2 h-2 rounded-full bg-teal-400 animate-ping" />
+                  <span>MLKit Escaneando</span>
+                </>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={toggleTorch}
+                className={`p-2 rounded-full backdrop-blur-md border transition-all ${
+                  torchOn
+                    ? 'bg-amber-500 text-black border-amber-400 shadow-lg'
+                    : 'bg-black/60 text-white border-white/20 hover:bg-black/80'
+                }`}
+                title="Linterna"
+              >
+                <Flashlight className="w-4 h-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setFacingMode((prev) => (prev === 'environment' ? 'user' : 'environment'))}
+                className="p-2 rounded-full bg-black/60 backdrop-blur-md border border-white/20 text-white hover:bg-black/80 transition-all"
+                title="Girar Cámara"
+              >
+                <RefreshCw className="w-4 h-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  stopCamera();
+                  setIsScannerOpen(false);
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs shadow-lg backdrop-blur-md transition-all active:scale-95 border border-rose-400/40"
+                title="Cerrar Cámara"
+              >
+                <X className="w-4 h-4" />
+                <span>Cerrar</span>
+              </button>
+            </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={toggleTorch}
-              className={`p-2 rounded-full backdrop-blur-md border transition-all ${
-                torchOn
-                  ? 'bg-amber-500 text-black border-amber-400 shadow-lg'
-                  : 'bg-black/60 text-white border-white/20 hover:bg-black/80'
-              }`}
-              title="Linterna"
-            >
-              <Flashlight className="w-4 h-4" />
-            </button>
-            <button
-              type="button"
-              onClick={() => setFacingMode((prev) => (prev === 'environment' ? 'user' : 'environment'))}
-              className="p-2 rounded-full bg-black/60 backdrop-blur-md border border-white/20 text-white hover:bg-black/80 transition-all"
-              title="Girar Cámara"
-            >
-              <RefreshCw className="w-4 h-4" />
-            </button>
-          </div>
+          {/* Camera Error Message */}
+          {cameraError && (
+            <div className="absolute inset-0 bg-zinc-900/95 backdrop-blur-md flex flex-col items-center justify-center p-4 text-center">
+              <Camera className="w-8 h-8 text-amber-400 mb-2" />
+              <p className="text-xs text-zinc-300 mb-3 max-w-xs">{cameraError}</p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={startCamera}
+                  className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold rounded-xl"
+                >
+                  Reintentar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    stopCamera();
+                    setIsScannerOpen(false);
+                  }}
+                  className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white text-xs font-bold rounded-xl"
+                >
+                  Cerrar
+                </button>
+              </div>
+            </div>
+          )}
         </div>
-
-        {/* Camera Error Message */}
-        {cameraError && (
-          <div className="absolute inset-0 bg-zinc-900/90 backdrop-blur-md flex flex-col items-center justify-center p-4 text-center">
-            <Camera className="w-8 h-8 text-amber-400 mb-2" />
-            <p className="text-xs text-zinc-300 mb-3 max-w-xs">{cameraError}</p>
-            <button
-              onClick={startCamera}
-              className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold rounded-xl"
-            >
-              Reintentar Cámara
-            </button>
-          </div>
-        )}
-      </div>
+      )}
 
       {/* Quick Barcode / Name Input for Fallback */}
       <div className="bg-[#141824] border border-white/10 rounded-2xl p-2.5 flex items-center gap-2">
@@ -1176,6 +1213,22 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
         onSelectMonth={(month) => setSelectedMonth(month)}
         onClose={() => setIsRollerModalOpen(false)}
       />
+
+      {/* Floating Action Button (FAB) - Visible floating trigger to activate native scanner */}
+      {!isScannerOpen && (
+        <button
+          type="button"
+          onClick={() => {
+            setIsScannerOpen(true);
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+          className="fixed bottom-24 right-4 z-40 flex items-center gap-2 bg-gradient-to-r from-teal-500 to-emerald-600 hover:from-teal-400 hover:to-emerald-500 text-black font-extrabold px-4 py-3 rounded-full shadow-2xl border-2 border-white/20 active:scale-95 transition-all animate-bounce-subtle"
+          title="Escanear Producto"
+        >
+          <Camera className="w-5 h-5 text-black" />
+          <span>🔍 Escanear Producto</span>
+        </button>
+      )}
     </div>
   );
 };
