@@ -61,8 +61,7 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
   const [filterTab, setFilterTab] = useState<'pending' | 'resolved' | 'all'>('pending');
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Camera scanner state - Starts completely OFF and at rest to prevent Android sensor freezing
-  const [isScannerOpen, setIsScannerOpen] = useState(false);
+  // Camera scanner state
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [cameraActive, setCameraActive] = useState(false);
@@ -137,23 +136,48 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
     return barcodeDetectorRef.current;
   };
 
-  // Camera lifecycle: sensor stays completely OFF until user clicks "🔍 Escanear Producto"
+  // Stop camera on unmount
   useEffect(() => {
-    if (isScannerOpen) {
-      startCamera();
-    } else {
-      stopCamera();
-    }
     return () => {
       stopCamera();
     };
-  }, [isScannerOpen, facingMode]);
+  }, []);
+
+  // Re-start if facingMode changes while camera is active
+  useEffect(() => {
+    if (cameraActive) {
+      startCamera();
+    }
+  }, [facingMode]);
+
+  // Connect video stream when camera becomes active
+  useEffect(() => {
+    if (cameraActive && stream && videoRef.current) {
+      videoRef.current.srcObject = stream;
+      videoRef.current.setAttribute('playsinline', 'true');
+      videoRef.current
+        .play()
+        .then(() => {
+          startDetectionLoop();
+        })
+        .catch((err) => {
+          console.warn('Error playing video stream:', err);
+        });
+    }
+  }, [cameraActive, stream]);
 
   const startCamera = async () => {
     setCameraError(null);
+    setIsCameraFrozen(false);
+    isCameraFrozenRef.current = false;
+    isProcessingRef.current = false;
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         throw new Error('Cámara no soportada en este navegador');
+      }
+
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop());
       }
 
       const constraints: MediaStreamConstraints = {
@@ -179,13 +203,7 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
         } catch {}
       }
 
-      if (videoRef.current) {
-        videoRef.current.srcObject = mediaStream;
-        videoRef.current.setAttribute('playsinline', 'true');
-        await videoRef.current.play();
-        setCameraActive(true);
-        startDetectionLoop();
-      }
+      setCameraActive(true);
     } catch (err: any) {
       console.warn('Camera start error:', err);
       setCameraError('Cámara no disponible. Puedes ingresar el código o buscar el producto manualmente abajo.');
@@ -202,8 +220,14 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
       stream.getTracks().forEach((track) => track.stop());
       setStream(null);
     }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
     setCameraActive(false);
     setTorchOn(false);
+    setIsCameraFrozen(false);
+    isCameraFrozenRef.current = false;
+    isProcessingRef.current = false;
   };
 
   const resumeCamera = async () => {
@@ -240,12 +264,8 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
 
     Sound.playScanBeep();
 
-    // 1. Apagar y cerrar la cámara de inmediato para liberar el sensor nativo de Android
+    // Apagar de forma automática el sensor de la cámara tras detectar el código (ahorra batería y libera hardware)
     stopCamera();
-    setIsScannerOpen(false);
-    setIsCameraFrozen(false);
-    isCameraFrozenRef.current = false;
-    isProcessingRef.current = false;
 
     // Look up in products catalog
     const found = products.find(
@@ -483,31 +503,29 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
         </div>
       </div>
 
-      {/* Camera Section: Standby Mode or Active MLKit Viewport */}
-      {!isScannerOpen ? (
-        <div className="bg-gradient-to-br from-zinc-900 to-zinc-950 border border-teal-500/30 rounded-2xl p-5 shadow-xl text-center space-y-3.5">
-          <div className="w-14 h-14 rounded-2xl bg-teal-500/10 border border-teal-500/30 text-teal-400 flex items-center justify-center mx-auto shadow-inner">
+      {/* Visor de Cámara: Apagado en Reposo o Activo */}
+      {!cameraActive ? (
+        <div className="bg-[#141824] border border-white/10 rounded-2xl p-5 shadow-xl flex flex-col items-center justify-center text-center space-y-3">
+          <div className="w-14 h-14 rounded-2xl bg-teal-500/15 border border-teal-500/30 text-teal-400 flex items-center justify-center shadow-inner">
             <Camera className="w-7 h-7" />
           </div>
+
           <div>
-            <h3 className="text-sm font-bold text-white flex items-center justify-center gap-2">
-              <span>Visor de Cámara en Reposo</span>
-              <span className="w-2 h-2 rounded-full bg-zinc-500 inline-block" />
-            </h3>
-            <p className="text-xs text-zinc-400 max-w-sm mx-auto mt-1">
-              Sensor apagado para evitar congelamiento de Android y ahorrar batería en consultas prolongadas.
+            <h3 className="text-sm font-bold text-white">Escáner en Reposo</h3>
+            <p className="text-[11px] text-zinc-400 max-w-xs mt-0.5">
+              Cámara apagada para cuidar la batería y evitar recalentamiento del sensor.
             </p>
           </div>
-          <div className="pt-1">
-            <button
-              type="button"
-              onClick={() => setIsScannerOpen(true)}
-              className="inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-xl bg-gradient-to-r from-teal-500 via-emerald-500 to-teal-400 hover:brightness-110 text-black font-extrabold text-sm shadow-xl shadow-teal-500/25 active:scale-95 transition-all w-full sm:w-auto"
-            >
-              <Camera className="w-5 h-5 text-black" />
-              <span>🔍 Escanear Producto</span>
-            </button>
-          </div>
+
+          {/* Botón Destacado Escanear Producto */}
+          <button
+            type="button"
+            id="btn-scan-product-expirations"
+            onClick={startCamera}
+            className="w-full sm:w-auto px-6 py-3.5 bg-gradient-to-r from-teal-500 to-emerald-600 hover:from-teal-400 hover:to-emerald-500 text-black font-extrabold text-sm rounded-2xl shadow-lg shadow-teal-500/25 flex items-center justify-center gap-2 active:scale-95 transition-all cursor-pointer"
+          >
+            <span>🔍 Escanear Producto</span>
+          </button>
         </div>
       ) : (
         <div className="relative rounded-2xl overflow-hidden bg-black border border-white/10 shadow-2xl aspect-[16/10] sm:aspect-[16/9] flex items-center justify-center">
@@ -538,22 +556,9 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
 
           {/* Top Camera Controls */}
           <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between pointer-events-auto z-20">
-            <div className={`flex items-center gap-1.5 backdrop-blur-md px-2.5 py-1 rounded-full border text-[11px] ${
-              isCameraFrozen
-                ? 'bg-amber-950/80 border-amber-500/40 text-amber-300'
-                : 'bg-black/60 border-white/10 text-teal-300'
-            }`}>
-              {isCameraFrozen ? (
-                <>
-                  <Pause className="w-3 h-3 text-amber-400" />
-                  <span>Captura pausada</span>
-                </>
-              ) : (
-                <>
-                  <span className="w-2 h-2 rounded-full bg-teal-400 animate-ping" />
-                  <span>MLKit Escaneando</span>
-                </>
-              )}
+            <div className="flex items-center gap-1.5 bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-full border border-white/10 text-[11px] text-teal-300">
+              <span className="w-2 h-2 rounded-full bg-teal-400 animate-ping" />
+              <span>MLKit Escaneando continuo</span>
             </div>
 
             <div className="flex items-center gap-2">
@@ -577,43 +582,36 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
               >
                 <RefreshCw className="w-4 h-4" />
               </button>
+              {/* Botón ✕ Cerrar dentro del visor activo */}
               <button
                 type="button"
-                onClick={() => {
-                  stopCamera();
-                  setIsScannerOpen(false);
-                }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs shadow-lg backdrop-blur-md transition-all active:scale-95 border border-rose-400/40"
-                title="Cerrar Cámara"
+                onClick={stopCamera}
+                className="px-3 py-1.5 rounded-full bg-rose-600/90 hover:bg-rose-500 text-white font-bold text-xs flex items-center gap-1 shadow-lg active:scale-95 transition-all border border-rose-400/40 cursor-pointer"
+                title="Apagar sensor y cerrar visor"
               >
-                <X className="w-4 h-4" />
-                <span>Cerrar</span>
+                <X className="w-3.5 h-3.5" />
+                <span>✕ Cerrar</span>
               </button>
             </div>
           </div>
 
           {/* Camera Error Message */}
           {cameraError && (
-            <div className="absolute inset-0 bg-zinc-900/95 backdrop-blur-md flex flex-col items-center justify-center p-4 text-center">
+            <div className="absolute inset-0 bg-zinc-900/90 backdrop-blur-md flex flex-col items-center justify-center p-4 text-center z-30">
               <Camera className="w-8 h-8 text-amber-400 mb-2" />
               <p className="text-xs text-zinc-300 mb-3 max-w-xs">{cameraError}</p>
               <div className="flex items-center gap-2">
                 <button
-                  type="button"
                   onClick={startCamera}
                   className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold rounded-xl"
                 >
-                  Reintentar
+                  Reintentar Cámara
                 </button>
                 <button
-                  type="button"
-                  onClick={() => {
-                    stopCamera();
-                    setIsScannerOpen(false);
-                  }}
-                  className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white text-xs font-bold rounded-xl"
+                  onClick={stopCamera}
+                  className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white text-xs font-bold rounded-xl"
                 >
-                  Cerrar
+                  ✕ Cerrar
                 </button>
               </div>
             </div>
@@ -1213,22 +1211,6 @@ export const ExpirationsView: React.FC<ExpirationsViewProps> = ({
         onSelectMonth={(month) => setSelectedMonth(month)}
         onClose={() => setIsRollerModalOpen(false)}
       />
-
-      {/* Floating Action Button (FAB) - Visible floating trigger to activate native scanner */}
-      {!isScannerOpen && (
-        <button
-          type="button"
-          onClick={() => {
-            setIsScannerOpen(true);
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-          }}
-          className="fixed bottom-24 right-4 z-40 flex items-center gap-2 bg-gradient-to-r from-teal-500 to-emerald-600 hover:from-teal-400 hover:to-emerald-500 text-black font-extrabold px-4 py-3 rounded-full shadow-2xl border-2 border-white/20 active:scale-95 transition-all animate-bounce-subtle"
-          title="Escanear Producto"
-        >
-          <Camera className="w-5 h-5 text-black" />
-          <span>🔍 Escanear Producto</span>
-        </button>
-      )}
     </div>
   );
 };
